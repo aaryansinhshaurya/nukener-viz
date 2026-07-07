@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NER Review Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+
+<script>
+  // ╔══════════════════════════════════════════════════════╗
+  // ║  FASTAPI BACKEND URL — point this at your API         ║
+  // ║  Local dev default: http://localhost:8000             ║
+  // ╚══════════════════════════════════════════════════════╝
+  const API_BASE_URL = "http://127.0.0.1:8000";
+</script>
+</head>
+<body>
+
+<!-- ══ AUTH SCREEN ═══════════════════════════════════════ -->
+<div class="overlay" id="authOverlay">
+  <div class="modal glass">
+    <div class="modal-header">
+      <span class="modal-logo">🏷️ NER Review Platform</span>
+    </div>
+    <p class="modal-desc">Sign in with your account, or create one to get started.</p>
+    <div id="apiStatus" class="status-line"></div>
+
+    <div class="tab-toggle">
+      <button class="active" data-authtab="login" onclick="switchAuthTab('login')">Log in</button>
+      <button data-authtab="signup" onclick="switchAuthTab('signup')">Sign up</button>
+    </div>
+
+    <div id="authFormLogin">
+      <label class="field-label">Email</label>
+      <input class="field" id="loginEmail" type="email" placeholder="you@example.com" autocomplete="username">
+      <label class="field-label">Password</label>
+      <input class="field" id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password">
+      <div class="error-text" id="loginError"></div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:6px" onclick="doLogin()">Log in</button>
+    </div>
+
+    <div id="authFormSignup" style="display:none">
+      <label class="field-label">Name</label>
+      <input class="field" id="signupName" type="text" placeholder="e.g. Alice Sharma">
+      <label class="field-label">Email</label>
+      <input class="field" id="signupEmail" type="email" placeholder="you@example.com" autocomplete="username">
+      <label class="field-label">Password</label>
+      <input class="field" id="signupPassword" type="password" placeholder="min. 8 characters" autocomplete="new-password">
+      <div class="error-text" id="signupError"></div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:6px" onclick="doSignup()">Create account</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PROJECT PICKER MODAL ══════════════════════════════ -->
+<div class="overlay hidden" id="overlay">
+  <div class="modal glass">
+    <div class="modal-header">
+      <span class="modal-logo">🏷️ Projects</span>
+      <button class="icon-btn" onclick="hideModal()" aria-label="Close">×</button>
+    </div>
+    <p class="modal-desc">Create a new project and upload a dataset, or open an existing one.</p>
+
+    <label class="field-label">New project name</label>
+    <input class="field" id="newProjectName" placeholder="My NER Project">
+    <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:10px" onclick="createProject()">⊕ Create project</button>
+
+    <div id="uploadSection" style="display:none;margin-top:16px">
+      <div class="divider-row"><hr class="divider"><span class="divider-label">Upload dataset</span><hr class="divider"></div>
+      <label class="upload-zone" id="uploadZone">
+        <input type="file" id="uploadFileInput" accept=".csv,.json" style="display:none">
+        <div class="upload-icon">📂</div>
+        <div class="upload-label">Click to upload or drag &amp; drop</div>
+        <div class="upload-sub">CSV or JSON — doc_id, sentence_id, sentence, entities</div>
+      </label>
+      <div id="uploadStatus" class="status-line"></div>
+    </div>
+
+    <div class="divider-row"><hr class="divider"><span class="divider-label">Your projects</span><hr class="divider"></div>
+    <div class="project-list" id="projectList">
+      <div class="empty-state">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ QUICK SAVE VERSION MODAL ══════════════════════════ -->
+<div class="overlay hidden" id="saveVersionOverlay">
+  <div class="modal glass" style="width:380px">
+    <div class="modal-header">
+      <span class="modal-logo">💾 Save Version</span>
+      <button class="icon-btn" onclick="hideSaveVersionModal()" aria-label="Close">×</button>
+    </div>
+    <p class="modal-desc">Save a checkpoint of the current review state for this project. You can revert to it later from the Versions tab.</p>
+    <label class="field-label">Version label <span class="opt">(optional)</span></label>
+    <input class="field" id="quickVersionLabel" placeholder="e.g. First full pass" onkeydown="if(event.key==='Enter') submitQuickSaveVersion()">
+    <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:14px" onclick="submitQuickSaveVersion()">💾 Save version</button>
+    <div class="status-line" id="quickSaveStatus"></div>
+  </div>
+</div>
+
+<!-- ══ APP SHELL ══════════════════════════════════════════ -->
+<div class="shell">
+
+  <header class="topbar glass">
+    <div class="topbar-brand">
+      <span class="brand-icon">🏷️</span>
+      <div>
+        <div class="brand-name">NER Review Platform</div>
+        <div class="brand-sub" id="projectSubtitle">No project open</div>
+      </div>
+    </div>
+
+    <div class="topbar-right">
+      <div class="stat-row" id="statRow" style="display:none">
+        <span class="chip" id="sDoc">0 docs</span>
+        <span class="chip" id="sSent">0 sentences</span>
+        <span class="chip" id="sEnt">0 entities</span>
+        <span class="chip" id="sType">0 types</span>
+      </div>
+      <span class="conn-dot" id="wsDot" title="Realtime connection"></span>
+      <button class="btn btn-ghost" id="topSaveBtn" style="display:none" onclick="showSaveVersionModal()">💾 Save version</button>
+      <div class="user-pill" id="userPill" style="display:none">
+        <div class="avatar" id="userAvatar">?</div>
+        <span id="userPillName">You</span>
+      </div>
+      <button class="btn btn-ghost" onclick="showModal(); loadProjectList()">⊕ Projects</button>
+      <button class="btn btn-ghost" onclick="logout()">Log out</button>
+    </div>
+  </header>
+
+  <div class="body-row">
+
+    <aside class="sidebar">
+      <div class="panel glass-sm">
+        <div class="panel-header">Documents<span class="badge" id="docCountBadge">0</span></div>
+        <div class="doc-list" id="docList"></div>
+      </div>
+
+      <div class="panel glass-sm" id="legendCard" style="display:none">
+        <div class="panel-header">
+          Entity Types
+          <div class="btn-group">
+            <button class="btn-tiny" onclick="selectAllLabels()">All</button>
+            <button class="btn-tiny" onclick="deselectAllLabels()">None</button>
+          </div>
+        </div>
+        <div class="legend-list" id="legendItems"></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="glass main-card">
+
+        <div class="main-header" id="mainHeader" style="display:none">
+          <div class="main-doc-title" id="mainDocTitle">—</div>
+          <span class="badge" id="mainDocBadge"></span>
+          <span class="progress-chip" id="progressChip">0/0 reviewed</span>
+          <span class="lock-chip" id="lockChip" style="display:none"></span>
+          <button class="btn-tiny" id="unlockBtn" style="display:none" onclick="manualUnlockClick()"></button>
+
+          <div class="tabs" style="margin-left:auto">
+            <button class="tab active" data-tab="annotate" onclick="showTab('annotate')">Annotate</button>
+            <button class="tab" data-tab="metrics"  onclick="showTab('metrics')">Metrics</button>
+            <button class="tab" data-tab="team"     onclick="showTab('team')">Team</button>
+            <button class="tab" data-tab="versions" onclick="showTab('versions')">Versions</button>
+          </div>
+        </div>
+
+        <div class="main-body" id="mainBody">
+          <div class="welcome" id="welcomeState">
+            <div class="welcome-glyph">✦</div>
+            <h2>Open a project to begin</h2>
+            <p>Create or open a project using the <strong>⊕ Projects</strong> button above.</p>
+            <div class="format-hint">
+              <div class="hint-block"><strong>CSV columns</strong><br>doc_id, sentence_id, sentence, entities<br><code>entities: [{"text":"...","label":"...","start_char":0,"end_char":3}]</code></div>
+              <div class="hint-block"><strong>JSON</strong><br>a list of objects with the same fields, one per sentence</div>
+            </div>
+          </div>
+
+          <div id="sentencePane"></div>
+          <div id="metricsPanel"></div>
+          <div id="teamPanel"></div>
+          <div id="versionsPanel"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
