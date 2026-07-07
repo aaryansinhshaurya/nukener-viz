@@ -9,7 +9,7 @@ app = FastAPI(title="NER Review Platform API", version="0.1.0")
 # it explicitly since browsers block cross-origin requests by default.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://nukenerviz.netlify.app"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
