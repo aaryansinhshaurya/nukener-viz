@@ -164,8 +164,9 @@ def parse_json(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
 
 def validate_offsets_against_text(sentences: List[SentenceIn]) -> None:
     """
-    Verify that entity.text exactly matches
-    sentence[start_char:end_char].
+    Verify that entity.text matches sentence[start_char:end_char]. If the
+    only difference is casing, normalize entity.text to the exact span so
+    stored rows and API responses use the sentence's real text.
     """
 
     errors: list[str] = []
@@ -176,14 +177,19 @@ def validate_offsets_against_text(sentences: List[SentenceIn]) -> None:
 
             actual = s.sentence[e.start_char:e.end_char]
 
-            if actual != e.text:
+            if actual == e.text:
+                continue
 
-                errors.append(
-                    f"Sentence {s.sentence_id}: "
-                    f"entity '{e.text}' with offsets "
-                    f"[{e.start_char}:{e.end_char}] "
-                    f"actually points to '{actual}'"
-                )
+            if actual.casefold() == e.text.casefold():
+                e.text = actual
+                continue
+
+            errors.append(
+                f"Sentence {s.sentence_id}: "
+                f"entity '{e.text}' with offsets "
+                f"[{e.start_char}:{e.end_char}] "
+                f"actually points to '{actual}'"
+            )
 
     if errors:
         raise IngestionError(errors)

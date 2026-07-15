@@ -176,6 +176,7 @@
             <p>Create or open a project using the <strong>⊕ Projects</strong> button above.</p>
             <div class="format-hint">
               <div class="hint-block"><strong>CSV columns</strong><br>doc_id, sentence_id, sentence, entities<br><code>entities: [{"text":"...","label":"...","start_char":0,"end_char":3}]</code></div>
+              <div class="hint-block">Offsets are the source of truth; casing differences in <code>text</code> are normalized on upload when they match the span.</div>
               <div class="hint-block"><strong>JSON</strong><br>a list of objects with the same fields, one per sentence</div>
             </div>
           </div>
