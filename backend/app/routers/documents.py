@@ -10,6 +10,7 @@ from app.schemas.review import ReviewOut
 from app.auth.dependencies import require_project_role
 from app.services.ingestion import parse_csv, parse_json, validate_offsets_against_text, IngestionError
 from app.services.reviews import get_latest_reviews_map
+from app.config import settings
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["documents"])
 
@@ -38,7 +39,9 @@ def upload_dataset(
             ),
         )
 
-    raw = file.file.read()
+    raw = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
+    if len(raw) > settings.MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
     filename = (file.filename or "").lower()
 
     try:
@@ -58,13 +61,14 @@ def upload_dataset(
     entities_created = 0
 
     for s in sentences:
-        if s.doc_id not in doc_map:
-            document = Document(project_id=project_id, doc_id_external=s.doc_id)
+        if s.document_id not in doc_map:
+            document = Document(project_id=project_id, doc_id_external=s.document_id,
+                                filename=s.filename, source=s.source, cleaned_title=s.cleaned_title)
             db.add(document)
             db.flush()  # assigns document.id for the sentence FK below
-            doc_map[s.doc_id] = document
+            doc_map[s.document_id] = document
 
-        document = doc_map[s.doc_id]
+        document = doc_map[s.document_id]
         sentence_row = Sentence(
             document_id=document.id,
             sentence_id_external=s.sentence_id,
@@ -106,7 +110,8 @@ def list_documents(
     result = []
     for d in documents:
         count = db.query(Sentence).filter(Sentence.document_id == d.id).count()
-        result.append(DocumentSummaryOut(id=d.id, doc_id_external=d.doc_id_external, sentence_count=count))
+        result.append(DocumentSummaryOut(id=d.id, doc_id_external=d.doc_id_external,
+                                         sentence_count=count, source=d.source))
     return result
 
 
@@ -127,7 +132,7 @@ def get_document(
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Attach each entity's current (latest) review, if any, so the
-    # frontend can show TP/FP/FN status and who reviewed it without a
+    # frontend can show TP/FP status and who reviewed it without a
     # second round-trip per entity.
     all_entity_ids = [e.id for s in document.sentences for e in s.entities]
     latest_reviews = get_latest_reviews_map(db, all_entity_ids)
@@ -170,4 +175,5 @@ def get_document(
             )
         )
 
-    return DocumentDetailOut(id=document.id, doc_id_external=document.doc_id_external, sentences=sentences_out)
+    return DocumentDetailOut(id=document.id, doc_id_external=document.doc_id_external,
+                             source=document.source, sentences=sentences_out)

@@ -16,6 +16,9 @@ class Document(Base):
     # The doc_id from the uploaded CSV/JSON (e.g. "D085") — kept separate
     # from our internal UUID primary key.
     doc_id_external: Mapped[str] = mapped_column(String(255), nullable=False)
+    filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cleaned_title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -43,7 +46,7 @@ class Sentence(Base):
 
 class EntitySource(str, enum.Enum):
     MODEL = "model"   # came from the uploaded CSV/JSON prediction
-    HUMAN = "human"   # added by a reviewer marking a missed (FN) entity
+    HUMAN = "human"   # retained for entities created before precision-only mode
 
 
 class Entity(Base):

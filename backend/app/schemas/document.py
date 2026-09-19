@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator, field_validator
 from app.models.document import EntitySource
 from app.schemas.review import ReviewOut
 
@@ -22,10 +22,18 @@ class EntityIn(BaseModel):
 
 
 class SentenceIn(BaseModel):
-    doc_id: str
+    document_id: str
+    filename: str | None = None
+    source: str | None = None
+    cleaned_title: str | None = None
     sentence_id: str
     sentence: str
     entities: list[EntityIn] = []
+
+    @field_validator("filename", "source", "cleaned_title", mode="before")
+    @classmethod
+    def blank_metadata_is_missing(cls, value):
+        return value.strip() or None if isinstance(value, str) else value
 
 
 class UploadSummary(BaseModel):
@@ -65,6 +73,7 @@ class DocumentSummaryOut(BaseModel):
     id: uuid.UUID
     doc_id_external: str
     sentence_count: int
+    source: str | None = None
 
 
 class DocumentDetailOut(BaseModel):
@@ -72,4 +81,5 @@ class DocumentDetailOut(BaseModel):
 
     id: uuid.UUID
     doc_id_external: str
+    source: str | None = None
     sentences: list[SentenceOut]

@@ -4,6 +4,7 @@ from app.models.document import Document, Sentence, Entity, EntitySource
 from app.models.review import Review, ReviewVerdict
 from app.models.locking import DocumentLock
 from app.models.version import ProjectVersion
+from app.models.token import ProjectInvitation, PasswordReset
 
 __all__ = [
     "User",
@@ -19,4 +20,6 @@ __all__ = [
     "ReviewVerdict",
     "DocumentLock",
     "ProjectVersion",
+    "ProjectInvitation",
+    "PasswordReset",
 ]

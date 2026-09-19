@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════
-   NER Review Platform — app.js
-   Talks to the FastAPI backend (JWT auth, WebSocket locks,
-   live metrics, versioning) instead of Supabase directly.
+   NukeNER Review — app.js
+   Talks to the FastAPI backend for accounts, reviews, locks,
+   metrics, and saved versions.
    ═══════════════════════════════════════════════════════════ */
 
 let S = {
@@ -19,7 +19,7 @@ let S = {
   locks: {},                // doc_id_external -> {locked_by, locked_by_name}
   ws: null, wsRetry: null,
   tab: "annotate",
-  fnSelection: null,
+  pendingInvite: null, resetToken: null,
 };
 
 const ONTOLOGY = {
@@ -46,8 +46,10 @@ const FALLBACK = [
 let _fi = 0;
 
 const esc  = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-const escA = s => String(s).replace(/"/g,"&quot;");
-const escJ = s => String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+const escA = s => esc(s).replace(/"/g,"&quot;");
+const escJ = s => String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'")
+  .replace(/\r/g, "\\r").replace(/\n/g, "\\n")
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const pct  = v => (v != null ? (v*100).toFixed(1)+"%" : "—");
 const wsUrl = () => API_BASE_URL.replace(/^http/, "ws");
 function _qs(id) { return document.getElementById(id); }
@@ -114,15 +116,22 @@ async function tryRefreshToken() {
    Boot
    ══════════════════════════════════════════════════════════ */
 window.addEventListener("DOMContentLoaded", async () => {
+  updateThemeButtons();
   checkApiStatus();
+  const params = new URLSearchParams(location.search);
+  S.pendingInvite = params.get("invite");
+  S.resetToken = params.get("reset");
+  if (S.resetToken) {
+    openAuth('reset');
+  } else if (S.pendingInvite) {
+    openAuth('signup');
+  }
   const savedRefresh = localStorage.getItem("ner_refresh_token");
-  if (savedRefresh) {
+  if (savedRefresh && !S.resetToken) {
     S.refreshToken = savedRefresh;
     const ok = await tryRefreshToken();
     if (ok) { await afterLogin(); }
-    else { localStorage.removeItem("ner_refresh_token"); showAuth(); }
-  } else {
-    showAuth();
+    else { localStorage.removeItem("ner_refresh_token"); }
   }
 
   document.getElementById("uploadFileInput").addEventListener("change", e => {
@@ -131,36 +140,87 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.addEventListener("click", e => { if (!e.target.closest(".ent-wrap")) closeMenu(); });
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") {
-      closeMenu(); cancelFn();
+      closeMenu();
       if (!_qs("saveVersionOverlay").classList.contains("hidden")) hideSaveVersionModal();
     }
   });
-  document.addEventListener("mouseup", onSelectionMouseUp);
+  setInterval(() => {
+    if (S.pid && S.currentDoc && S.locks[S.currentDoc]?.locked_by === S.meId) lockCurrentDoc();
+  }, 60000);
 });
 
 async function checkApiStatus() {
   const el = _qs("apiStatus");
-  el.textContent = "⏳ Connecting to API…"; el.style.color = "";
+  el.textContent = ""; el.style.color = "";
   try {
     const res = await fetch(`${API_BASE_URL}/health`);
     if (!res.ok) throw new Error("unreachable");
-    el.textContent = "✅ API connected"; el.style.color = "#12a454";
+    el.textContent = "";
   } catch (e) {
-    el.innerHTML = `❌ <strong>API unreachable</strong> at ${esc(API_BASE_URL)} — is the backend running?`;
-    el.style.color = "#e5484d";
+    el.textContent = "The service is unavailable right now. Please try again shortly.";
+    el.style.color = "var(--bad)";
   }
 }
 
 /* ══════════════════════════════════════════════════════════
-   Auth
+   Home, theme, and account access
    ══════════════════════════════════════════════════════════ */
-function showAuth() { _qs("authOverlay").classList.remove("hidden"); }
-function hideAuth() { _qs("authOverlay").classList.add("hidden"); }
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem("nukener-theme", next);
+  updateThemeButtons();
+}
+
+function updateThemeButtons() {
+  const dark = document.documentElement.dataset.theme === "dark";
+  document.querySelectorAll(".theme-toggle").forEach(button => {
+    button.textContent = dark ? "☀ Light mode" : "☾ Dark mode";
+    button.setAttribute("aria-pressed", String(dark));
+  });
+}
+
+function openAuth(tab) {
+  switchAuthTab(tab);
+  _qs("authPanel").scrollIntoView({ behavior: "smooth", block: "center" });
+  const firstField = {login:"loginEmail", signup:"signupName", forgot:"forgotEmail", reset:"resetPassword"}[tab];
+  if (firstField) _qs(firstField).focus({preventScroll:true});
+}
 
 function switchAuthTab(tab) {
   document.querySelectorAll("[data-authtab]").forEach(b => b.classList.toggle("active", b.dataset.authtab === tab));
+  _qs("authTabs").style.display = tab === "login" || tab === "signup" ? "flex" : "none";
+  const copy = {
+    login: ["Welcome back", "Sign in to continue your review."],
+    signup: ["Create your account", "Start a workspace or join a project invitation."],
+    forgot: ["Reset your password", "We’ll email you a link to choose a new one."],
+    reset: ["Choose a new password", "Enter a new password for your account."],
+  }[tab];
+  _qs("authTitle").textContent = copy[0];
+  _qs("authDescription").textContent = copy[1];
   _qs("authFormLogin").style.display  = tab === "login"  ? "" : "none";
   _qs("authFormSignup").style.display = tab === "signup" ? "" : "none";
+  _qs("authFormForgot").style.display = tab === "forgot" ? "" : "none";
+  _qs("authFormReset").style.display = tab === "reset" ? "" : "none";
+}
+
+async function requestPasswordReset() {
+  const el = _qs("forgotStatus");
+  try {
+    const result = await api("/auth/forgot-password", {method:"POST", body:{email:_qs("forgotEmail").value.trim()}, auth:false});
+    el.textContent = result.message;
+  } catch (e) { el.textContent = e.message; }
+}
+
+async function submitPasswordReset() {
+  const el = _qs("resetStatus");
+  try {
+    const result = await api("/auth/reset-password", {method:"POST", body:{token:S.resetToken, password:_qs("resetPassword").value}, auth:false});
+    el.textContent = result.message;
+    S.resetToken = null;
+    history.replaceState({}, "", location.pathname);
+    setTimeout(() => switchAuthTab("login"), 1600);
+  } catch (e) { el.textContent = e.message; }
 }
 
 async function doLogin() {
@@ -194,14 +254,37 @@ async function doSignup() {
 async function afterLogin() {
   const me = await api("/auth/me");
   S.meId = me.id; S.meName = me.name; S.meEmail = me.email;
-  hideAuth();
+  _qs("landingPage").classList.add("hidden");
   _qs("userPill").style.display = "flex";
   _qs("userPillName").textContent = S.meName;
   _qs("userAvatar").textContent = (S.meName[0] || "?").toUpperCase();
-  showModal(); loadProjectList();
+  showDashboard();
+  if (S.pendingInvite) {
+    try {
+      await api("/projects/invitations/accept", {method:"POST", body:{token:S.pendingInvite}});
+      S.pendingInvite = null;
+      history.replaceState({}, "", location.pathname);
+      await loadProjectList();
+      alert("Invitation accepted. The project is now in your dashboard.");
+    } catch (e) { alert("Could not accept invitation: " + e.message); }
+  }
+}
+
+function showDashboard() {
+  if (!S.meId) return;
+  if (S.currentDoc) unlockDoc(S.currentDoc);
+  if (S.ws) { S.ws.close(); S.ws = null; }
+  resetUI();
+  _qs("appShell").classList.add("hidden");
+  _qs("landingPage").classList.add("hidden");
+  _qs("dashboardPage").classList.remove("hidden");
+  _qs("dashboardGreeting").textContent = `Welcome, ${S.meName.split(" ")[0]}`;
+  loadProjectList();
+  loadTrash();
 }
 
 function logout() {
+  if (S.currentDoc) unlockDoc(S.currentDoc);
   if (S.ws) { S.ws.close(); S.ws = null; }
   localStorage.removeItem("ner_refresh_token");
   S = Object.assign(S, {
@@ -211,7 +294,9 @@ function logout() {
   resetUI();
   _qs("userPill").style.display = "none";
   hideModal();
-  showAuth();
+  _qs("dashboardPage").classList.add("hidden");
+  _qs("appShell").classList.add("hidden");
+  _qs("landingPage").classList.remove("hidden");
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -226,9 +311,10 @@ async function loadProjectList() {
   try {
     const list = await api("/projects");
     S.projects = list;
+    renderDashboardProjects(list);
     if (!list.length) { el.innerHTML = `<div class="empty-state">No projects yet — create one above.</div>`; return; }
     el.innerHTML = list.map(p => {
-      const isOwner = p.owner_id === S.meId;
+      const isOwner = p.role === "owner";
       return `
       <div class="project-row" onclick="openProject('${p.id}','${escJ(p.name)}')">
         <div>
@@ -236,7 +322,7 @@ async function loadProjectList() {
           <div class="project-date">${(p.created_at||"").slice(0,10)}</div>
         </div>
         <div class="project-actions">
-          <span class="project-role">${isOwner ? "Owner" : "Member"}</span>
+          <span class="project-role">${esc(p.role || (isOwner ? "owner" : "member"))}</span>
           ${isOwner ? `<button class="btn btn-danger btn-tiny" onclick="event.stopPropagation(); deleteProject('${p.id}','${escJ(p.name)}')">Delete</button>` : ""}
         </div>
       </div>`;
@@ -246,12 +332,37 @@ async function loadProjectList() {
   }
 }
 
+function renderDashboardProjects(projects) {
+  const el = _qs("dashboardProjects");
+  if (!projects.length) {
+    el.innerHTML = `<div class="dashboard-card"><h3>Your first project starts here</h3><p>Create a project, then upload your model predictions.</p><button class="btn btn-primary" style="margin-top:18px" onclick="showModal()">Create project</button></div>`;
+    return;
+  }
+  el.innerHTML = projects.map(p => `<button class="dashboard-card" onclick="openProject('${p.id}')">
+    <span class="project-role">${esc(p.role || "member")}</span><h3>${esc(p.name)}</h3>
+    <p>Created ${(p.created_at || "").slice(0,10)} · Open project →</p>
+  </button>`).join("");
+}
+
+async function loadTrash() {
+  const el = _qs("dashboardTrash");
+  try {
+    const items = await api("/projects/deleted/mine");
+    el.innerHTML = items.length ? items.map(p => `<div class="trash-row"><span>${esc(p.name)} <small>· recoverable for 30 days</small></span><button class="btn btn-ghost" onclick="restoreProject('${p.id}')">Restore</button></div>`).join("") : `<div class="empty-state">No deleted projects.</div>`;
+  } catch (e) { el.textContent = e.message; }
+}
+
+async function restoreProject(projectId) {
+  try { await api(`/projects/${projectId}/restore`, {method:"POST"}); await loadProjectList(); await loadTrash(); }
+  catch (e) { alert("Could not restore project: " + e.message); }
+}
+
 async function deleteProject(projectId, name) {
-  if (!confirm(`Permanently delete "${name}"? This removes every document, entity, review, and saved version — this cannot be undone.`)) return;
+  if (prompt(`Type the project name to move it to Recently deleted for 30 days:\n${name}`) !== name) return;
   try {
     await api(`/projects/${projectId}`, { method: "DELETE" });
     if (S.pid === projectId) { resetUI(); }
-    loadProjectList();
+    loadProjectList(); loadTrash();
   } catch (e) {
     alert("Could not delete project: " + e.message);
   }
@@ -301,14 +412,19 @@ document.addEventListener("drop", e => {
    Open project
    ══════════════════════════════════════════════════════════ */
 async function openProject(pid, name = "") {
+  if (S.currentDoc) await unlockDoc(S.currentDoc);
+  if (S.ws) { S.ws.close(); S.ws = null; }
+  clearTimeout(S.wsRetry);
   S.pid = pid; S.pname = name || S.pname || "Project";
   Object.assign(S, {
     documents: [], currentDoc: null, docDetail: null, sentenceIndex: new Map(),
     entityIndex: new Map(), entityCounts: {}, labels: new Set(), activeLabels: new Set(),
-    lStyle: {}, openEntityId: null, locks: {},
+    lStyle: {}, openEntityId: null, locks: {}, versionPreview: null,
   });
 
   hideModal();
+  _qs("dashboardPage").classList.add("hidden");
+  _qs("appShell").classList.remove("hidden");
   _qs("projectSubtitle").textContent = S.pname;
   _qs("statRow").style.display = "flex";
   _qs("welcomeState").style.display = "none";
@@ -329,13 +445,13 @@ async function openProject(pid, name = "") {
     S.locks = {};
     for (const l of lockList) S.locks[l.doc_id_external] = { locked_by: l.locked_by, locked_by_name: l.locked_by_name };
   } catch (e) {
-    alert("Failed to open project: " + e.message); showModal(); return;
+    alert("Failed to open project: " + e.message); showDashboard(); return;
   }
 
   updateStats();
   buildDocList();
   connectLockSocket();
-  _qs("topSaveBtn").style.display = "inline-flex";
+  _qs("topSaveBtn").style.display = canEdit() ? "inline-flex" : "none";
 
   if (S.documents.length) selectDoc(S.documents[0].doc_id_external);
   else {
@@ -347,7 +463,7 @@ async function openProject(pid, name = "") {
 
 function resetUI() {
   if (S.ws) { S.ws.close(); S.ws = null; }
-  S.pid = null; S.pname = ""; S.currentDoc = null; S.tab = "annotate"; S.ownerId = null;
+  S.pid = null; S.pname = ""; S.currentDoc = null; S.tab = "annotate"; S.ownerId = null; S.myRole = null;
   _qs("projectSubtitle").textContent = "No project open";
   _qs("topSaveBtn").style.display = "none";
   _qs("statRow").style.display = "none";
@@ -432,7 +548,7 @@ function docLockedByOther() {
   const lock = S.locks[S.currentDoc];
   return !!(lock && lock.locked_by !== S.meId);
 }
-function canEditCurrentDoc() { return canEdit() && !docLockedByOther(); }
+function canEditCurrentDoc() { return canEdit() && S.locks[S.currentDoc]?.locked_by === S.meId; }
 
 async function lockCurrentDoc() {
   try {
@@ -472,18 +588,21 @@ async function manualUnlockClick() {
     alert("Could not unlock: " + e.message);
   }
 }
-window.addEventListener("beforeunload", () => {
+window.addEventListener("pagehide", () => {
   if (S.pid && S.currentDoc && S.locks[S.currentDoc]?.locked_by === S.meId) {
-    navigator.sendBeacon(`${API_BASE_URL}/projects/${S.pid}/documents/${encodeURIComponent(S.currentDoc)}/unlock`);
+    fetch(`${API_BASE_URL}/projects/${S.pid}/documents/${encodeURIComponent(S.currentDoc)}/unlock`, {
+      method:"POST", headers:{Authorization:`Bearer ${S.accessToken}`}, keepalive:true,
+    }).catch(() => {});
   }
 });
 
 function updateDocHeader() {
   const d = S.docDetail;
   if (!d) return;
-  const entCount = d.sentences.reduce((n,s)=>n+s.entities.length, 0);
-  const reviewedCount = d.sentences.reduce((n,s)=>n+s.entities.filter(e=>e.current_review || e.source==="human").length, 0);
+  const entCount = d.sentences.reduce((n,s)=>n+s.entities.filter(e=>e.source==="model").length, 0);
+  const reviewedCount = d.sentences.reduce((n,s)=>n+s.entities.filter(e=>e.source==="model" && e.current_review).length, 0);
   _qs("mainDocTitle").textContent = d.doc_id_external;
+  if (d.source) _qs("mainDocTitle").innerHTML = `${esc(d.doc_id_external)} <span class="source-note">· ${esc(d.source)}</span>`;
   _qs("mainDocBadge").textContent = `${d.sentences.length} sentences · ${entCount} entities`;
   _qs("progressChip").textContent = `${reviewedCount}/${entCount} reviewed`;
 
@@ -514,7 +633,7 @@ function indexDocDetail() {
   S.entityCounts = {}; S.labels = new Set();
   for (const sent of S.docDetail.sentences) {
     S.sentenceIndex.set(sent.sentence_id_external, sent);
-    for (const ent of sent.entities) {
+    for (const ent of sent.entities.filter(e => e.source === "model")) {
       S.entityIndex.set(ent.id, { entity: ent, sentenceIdExternal: sent.sentence_id_external });
       S.entityCounts[ent.label] = (S.entityCounts[ent.label]||0) + 1;
       S.labels.add(ent.label);
@@ -533,13 +652,25 @@ function connectLockSocket() {
   const ws = new WebSocket(url);
   S.ws = ws;
   ws.onopen  = () => { _qs("wsDot").className = "conn-dot on"; };
-  ws.onclose = () => {
+  ws.onclose = async event => {
     _qs("wsDot").className = "conn-dot off";
-    if (S.pid) S.wsRetry = setTimeout(connectLockSocket, 3000);
+    if (S.ws !== ws || !S.pid || event.code === 4403) return;
+    if (event.code === 4401 && !(await tryRefreshToken())) return;
+    S.wsRetry = setTimeout(connectLockSocket, 3000);
   };
   ws.onerror = () => ws.close();
   ws.onmessage = (evt) => {
     let msg; try { msg = JSON.parse(evt.data); } catch (_) { return; }
+    if (msg.type === "review") {
+      if (S.docDetail && msg.document_id === S.docDetail.id) {
+        api(`/projects/${S.pid}/documents/${encodeURIComponent(S.currentDoc)}`).then(detail => {
+          if (S.currentDoc !== detail.doc_id_external) return;
+          S.docDetail = detail; indexDocDetail(); renderSentences(); updateDocHeader();
+          if (S.tab === "metrics") loadMetrics();
+        }).catch(() => {});
+      }
+      return;
+    }
     if (msg.type === "lock") {
       S.locks[msg.doc_id_external] = { locked_by: msg.locked_by, locked_by_name: msg.locked_by_name };
     } else if (msg.type === "unlock") {
@@ -566,7 +697,7 @@ function renderSentences() {
 
 function buildSentHTML(sent) {
   const text = sent.text || "";
-  const ents = [...sent.entities].sort((a,b)=>a.start_char-b.start_char);
+  const ents = sent.entities.filter(e => e.source === "model").sort((a,b)=>a.start_char-b.start_char);
   if (!ents.length) return esc(text);
   let html = "", cur = 0;
   for (const ent of ents) {
@@ -594,7 +725,7 @@ function getStyle(label) {
     const s = matched ? ONTOLOGY[matched] : FALLBACK[_fi++ % FALLBACK.length];
     S.lStyle[label] = s;
     const el = document.createElement("style");
-    el.textContent = `.entity[data-type="${label.replace(/"/g,'\\"')}"]{ background:${s.bg}; border-bottom-color:${s.bd}; }`;
+    el.textContent = `.entity[data-type="${CSS.escape(label)}"]{ background:${s.bg}; border-bottom-color:${s.bd}; }`;
     document.head.appendChild(el);
   }
   return S.lStyle[label];
@@ -602,26 +733,19 @@ function getStyle(label) {
 
 function buildEntitySpan(ent) {
   const s = getStyle(ent.label);
-  const isHuman = ent.source === "human";
-  const verdict = isHuman ? "fn" : (ent.current_review ? ent.current_review.verdict.toLowerCase() : "none");
+  const verdict = ent.current_review ? ent.current_review.verdict.toLowerCase() : "none";
   const saving = S.saving.has(ent.id);
   const dis = saving ? "disabled" : "";
   const editable = canEditCurrentDoc();
   const isOpen = S.openEntityId === ent.id;
   const eidJs = escJ(ent.id);
 
-  let bar;
-  if (isHuman) {
-    const who = ent.current_review ? ent.current_review.reviewer_name : "someone";
-    bar = `<span class="ent-bar" onclick="event.stopPropagation()"><span class="ent-label-tip">${esc(ent.label)} · FN reported by ${esc(who)}</span></span>`;
-  } else {
-    const reviewer = ent.current_review ? ` · last: ${esc(ent.current_review.reviewer_name)}` : "";
-    bar = `<span class="ent-bar" onclick="event.stopPropagation()">
+  const reviewer = ent.current_review ? ` · last: ${esc(ent.current_review.reviewer_name)}` : "";
+  const bar = `<span class="ent-bar" onclick="event.stopPropagation()">
       <span class="ent-label-tip">${esc(ent.label)}${reviewer}</span>
       <button class="ent-btn ent-btn-tp ${verdict==='tp'?'ent-active-tp':''}" ${dis||!editable?"disabled":""} onclick="setVerdict('${eidJs}','TP',event)">TP</button>
       <button class="ent-btn ent-btn-fp ${verdict==='fp'?'ent-active-fp':''}" ${dis||!editable?"disabled":""} onclick="setVerdict('${eidJs}','FP',event)">FP</button>
     </span>`;
-  }
 
   return `<span class="ent-wrap ${isOpen?"open":""}"><span class="entity verdict-${verdict}" data-type="${escA(ent.label)}" data-eid="${escA(ent.id)}" onclick="toggleEntityBar('${eidJs}',event)">${esc(ent.text)}</span>${bar}</span>`;
 }
@@ -671,95 +795,6 @@ async function setVerdict(entityId, verdict, ev) {
     rerenderEntity(entityId); updateDocHeader();
   }
 }
-
-/* ══════════════════════════════════════════════════════════
-   Missed-entity (FN) capture via click-and-drag text selection
-   ══════════════════════════════════════════════════════════ */
-function onSelectionMouseUp(e) {
-  const container = e.target.closest(".sent-text");
-  cancelFn();
-  if (!container || container.dataset.editable !== "true") return;
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-  if (!container.contains(sel.anchorNode) || !container.contains(sel.focusNode)) return;
-
-  const range = sel.getRangeAt(0);
-  const selectedText = range.toString();
-  if (!selectedText.trim()) return;
-
-  const start = offsetWithin(container, range.startContainer, range.startOffset);
-  const end = offsetWithin(container, range.endContainer, range.endOffset);
-  if (start == null || end == null || end <= start) return;
-
-  const sentExternal = container.dataset.sent;
-  const rect = range.getBoundingClientRect();
-  showFnToolbar(rect, sentExternal, selectedText, Math.min(start,end), Math.max(start,end));
-}
-
-function offsetWithin(container, node, nodeOffset) {
-  // Walks all text nodes inside `container` (which may contain entity
-  // <span>s) and sums lengths up to `node`/`nodeOffset` to get a plain
-  // character offset into the sentence's raw text.
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-  let total = 0, found = false, result = 0;
-  let n;
-  while ((n = walker.nextNode())) {
-    if (n === node) { result = total + nodeOffset; found = true; break; }
-    total += n.textContent.length;
-  }
-  return found ? result : null;
-}
-
-function showFnToolbar(rect, sentExternal, text, start, end) {
-  S.fnSelection = { sentExternal, text, start, end };
-  let bar = _qs("fnToolbar");
-  if (!bar) {
-    bar = document.createElement("div");
-    bar.id = "fnToolbar";
-    bar.className = "fn-toolbar";
-    document.body.appendChild(bar);
-  }
-  bar.innerHTML = `
-    <input id="fnLabelInput" placeholder="Entity label…" autofocus>
-    <button onclick="submitFn()">Mark as FN</button>
-    <button class="fn-cancel" onclick="cancelFn()">Cancel</button>`;
-  bar.style.left = `${Math.max(8, rect.left)}px`;
-  bar.style.top = `${Math.max(8, rect.top - 46 + window.scrollY)}px`;
-  bar.style.display = "flex";
-  setTimeout(() => _qs("fnLabelInput")?.focus(), 0);
-}
-function cancelFn() {
-  const bar = _qs("fnToolbar");
-  if (bar) bar.style.display = "none";
-  S.fnSelection = null;
-}
-
-async function submitFn() {
-  const sel = S.fnSelection;
-  if (!sel) return;
-  const label = (_qs("fnLabelInput")?.value || "").trim();
-  if (!label) { _qs("fnLabelInput").focus(); return; }
-  try {
-    const result = await api(
-      `/projects/${S.pid}/documents/${encodeURIComponent(S.currentDoc)}/sentences/${encodeURIComponent(sel.sentExternal)}/missed-entity`,
-      { method: "POST", body: { text: sel.text, label, start_char: sel.start, end_char: sel.end } }
-    );
-    const sentence = S.sentenceIndex.get(sel.sentExternal);
-    sentence.entities.push({
-      id: result.id, text: result.text, label: result.label,
-      start_char: result.start_char, end_char: result.end_char,
-      source: result.source, current_review: result.review,
-    });
-    indexDocDetail();
-    renderSentences(); buildLegend(); updateDocHeader(); updateStats();
-  } catch (e) {
-    alert("Could not report missed entity: " + e.message);
-  } finally {
-    cancelFn();
-    window.getSelection()?.removeAllRanges();
-  }
-}
-
 /* ══════════════════════════════════════════════════════════
    Legend / label filtering
    ══════════════════════════════════════════════════════════ */
@@ -818,15 +853,25 @@ function metricCards(m, title) {
   return `<h4 style="margin:0 0 10px;font-size:13.5px">${esc(title)}</h4>
     <div class="metric-cards">
       <div class="metric-card"><div class="metric-val" style="color:#12a454">${pct(m.precision)}</div><div class="metric-lbl">Precision</div><div class="metric-sub">TP=${m.tp} / FP=${m.fp}</div></div>
-      <div class="metric-card"><div class="metric-val" style="color:#0a84ff">${pct(m.recall)}</div><div class="metric-lbl">Recall</div><div class="metric-sub">TP=${m.tp} / FN=${m.fn}</div></div>
-      <div class="metric-card"><div class="metric-val" style="color:#5e5ce6">${pct(m.f1)}</div><div class="metric-lbl">F1</div><div class="metric-sub">${m.percent_reviewed}% reviewed</div></div>
-      <div class="metric-card"><div class="metric-val">${m.tp+m.fp+m.fn}</div><div class="metric-lbl">Total verdicts</div><div class="metric-sub">${m.tp} TP · ${m.fp} FP · ${m.fn} FN</div></div>
+      <div class="metric-card"><div class="metric-val" style="color:#0a84ff">${m.percent_reviewed}%</div><div class="metric-lbl">Review coverage</div><div class="metric-sub">${m.reviewed_model_entities} of ${m.total_model_entities} predictions</div></div>
+      <div class="metric-card"><div class="metric-val">${m.tp + m.fp}</div><div class="metric-lbl">Reviewed predictions</div><div class="metric-sub">${m.tp} TP · ${m.fp} FP</div></div>
     </div>`;
 }
 function renderMetrics(project, doc) {
-  let html = metricCards(project, "Project-wide");
+  let html = `<div class="btn-group" style="margin-bottom:16px"><button class="btn btn-ghost" onclick="downloadExport('csv')">Export CSV</button><button class="btn btn-ghost" onclick="downloadExport('json')">Export JSON</button></div>` + metricCards(project, "Project-wide");
   if (doc) html += `<div style="margin-top:20px">${metricCards(doc, `Current document — ${esc(S.currentDoc)}`)}</div>`;
   _qs("metricsPanel").innerHTML = html;
+}
+
+async function downloadExport(format) {
+  const url = `${API_BASE_URL}/projects/${S.pid}/export?format=${format}`;
+  let response = await fetch(url, {headers:{Authorization:`Bearer ${S.accessToken}`}});
+  if (response.status === 401 && await tryRefreshToken()) response = await fetch(url, {headers:{Authorization:`Bearer ${S.accessToken}`}});
+  if (!response.ok) { alert("Export failed. Please try again."); return; }
+  const blobUrl = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = blobUrl; link.download = `ner-reviews-${S.pid}.${format}`; link.click();
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 }
 
 /* ── Team ── */
@@ -835,13 +880,16 @@ async function loadTeam() {
   const panel = _qs("teamPanel");
   panel.innerHTML = `<div class="empty-state">Loading…</div>`;
   try {
-    const members = await api(`/projects/${S.pid}/members`);
-    renderTeam(members);
+    const [members, invitations] = await Promise.all([
+      api(`/projects/${S.pid}/members`),
+      S.myRole === "owner" ? api(`/projects/${S.pid}/invitations`) : Promise.resolve([]),
+    ]);
+    renderTeam(members, invitations);
   } catch (e) {
     panel.innerHTML = `<div class="empty-state" style="color:#e5484d">⚠️ ${esc(e.message)}</div>`;
   }
 }
-function renderTeam(members) {
+function renderTeam(members, invitations = []) {
   const rows = members.map(m => {
     const isOwnerRow = m.user_id === S.ownerId;
     const canRemove = S.myRole === "owner" && !isOwnerRow;
@@ -856,7 +904,7 @@ function renderTeam(members) {
   if (S.myRole === "owner") {
     inviteForm = `<div class="invite-form">
       <h4>Invite a collaborator</h4>
-      <p style="font-size:12.5px;color:var(--t2);margin:2px 0 0">They need an existing account on this platform.</p>
+      <p style="font-size:12.5px;color:var(--t2);margin:2px 0 0">They can sign up after receiving the invitation email.</p>
       <div class="invite-row">
         <input class="field" id="inviteEmail" type="email" placeholder="colleague@example.com" style="flex:2">
         <select class="field" id="inviteRole" style="flex:1">
@@ -869,7 +917,10 @@ function renderTeam(members) {
       <div class="invite-result" id="inviteResult"></div>
     </div>`;
   }
-  _qs("teamPanel").innerHTML = `<div class="team-grid">${rows}</div>${inviteForm}`;
+  const invites = S.myRole === "owner" ? `<h4>Invitations</h4>${invitations.length ? invitations.map(i => `
+    <div class="invitation-row"><div><strong>${esc(i.email)}</strong> · ${esc(i.role)}<br><small>${esc(i.status)} · expires ${new Date(i.expires_at).toLocaleDateString()}</small></div>
+    ${i.status === "pending" || i.status === "expired" ? `<div class="btn-group"><button class="btn-tiny" onclick="resendInvitation('${i.id}')">Resend</button><button class="btn-tiny danger" onclick="revokeInvitation('${i.id}')">Revoke</button></div>` : ""}</div>`).join("") : `<div class="empty-state">No invitations yet.</div>`}` : "";
+  _qs("teamPanel").innerHTML = `<div class="team-grid">${rows}</div>${inviteForm}${invites}`;
 }
 async function inviteMember() {
   const email = _qs("inviteEmail").value.trim();
@@ -878,11 +929,21 @@ async function inviteMember() {
   if (!email) return;
   try {
     await api(`/projects/${S.pid}/invite`, { method: "POST", body: { email, role } });
-    resEl.innerHTML = `<div class="invite-box invite-ok">✅ Added ${esc(email)} as ${esc(role)}.</div>`;
+    resEl.innerHTML = `<div class="invite-box invite-ok">Invitation email sent to ${esc(email)}.</div>`;
     loadTeam();
   } catch (e) {
     resEl.innerHTML = `<div class="invite-box invite-warn">⚠️ ${esc(e.message)}</div>`;
   }
+}
+
+async function resendInvitation(id) {
+  try { await api(`/projects/${S.pid}/invitations/${id}/resend`, {method:"POST"}); loadTeam(); }
+  catch (e) { alert("Could not resend invitation: " + e.message); }
+}
+async function revokeInvitation(id) {
+  if (!confirm("Revoke this invitation?")) return;
+  try { await api(`/projects/${S.pid}/invitations/${id}`, {method:"DELETE"}); loadTeam(); }
+  catch (e) { alert("Could not revoke invitation: " + e.message); }
 }
 
 async function removeMember(memberId, displayName) {
@@ -908,10 +969,11 @@ async function loadVersions() {
   }
 }
 function renderVersions(versions) {
-  const toolbar = `<div class="version-toolbar">
+  const toolbar = canEdit() ? `<div class="version-toolbar">
     <input class="field" id="versionLabel" placeholder="Version label (optional)" style="flex:1">
     <button class="btn btn-primary" onclick="saveVersion()">💾 Save version</button>
-  </div>`;
+  </div>` : "";
+  const choices = `<label class="field-label">Compare against</label><select class="field" id="compareAgainst"><option value="current">Current project</option>${versions.map(v => `<option value="${v.id}">${esc(v.label)}</option>`).join("")}</select>`;
   const rows = versions.length ? versions.map(v => `
     <div class="version-row">
       <div class="version-dot"></div>
@@ -919,9 +981,52 @@ function renderVersions(versions) {
         <div class="version-label">${esc(v.label)}</div>
         <div class="version-meta">by ${esc(v.created_by_name)} · ${new Date(v.created_at).toLocaleString()}</div>
       </div>
-      ${S.myRole === "owner" ? `<div class="version-actions"><button class="btn btn-danger" onclick="revertVersion('${escJ(v.id)}','${escJ(v.label)}')">Revert to this</button></div>` : ""}
+      <div class="version-actions"><button class="btn btn-ghost" onclick="inspectVersion('${v.id}')">Inspect snapshot</button><button class="btn btn-ghost" onclick="compareVersion('${v.id}','${escJ(v.label)}')">Compare</button></div>
     </div>`).join("") : `<div class="empty-state">No saved versions yet.</div>`;
-  _qs("versionsPanel").innerHTML = `${toolbar}<div class="version-list">${rows}</div>`;
+  _qs("versionsPanel").innerHTML = `${toolbar}${choices}<div class="version-list">${rows}</div><div id="versionInspection"></div><div id="versionPreview"></div>`;
+}
+
+async function inspectVersion(versionId) {
+  const panel = _qs("versionInspection");
+  panel.innerHTML = `<div class="empty-state">Loading saved snapshot…</div>`;
+  try {
+    const data = await api(`/projects/${S.pid}/versions/${versionId}`);
+    S.inspectedSnapshot = data.snapshot;
+    const docs = data.snapshot.documents || [];
+    const sentenceCount = docs.reduce((total, doc) => total + doc.sentences.length, 0);
+    const entityCount = docs.reduce((total, doc) => total + doc.sentences.reduce((n, sentence) => n + sentence.entities.length, 0), 0);
+    panel.innerHTML = `<div class="version-preview"><h4>${esc(data.version.label)}</h4>
+      <p>Saved by ${esc(data.version.created_by_name)} on ${new Date(data.version.created_at).toLocaleString()} · ${docs.length} documents · ${sentenceCount} sentences · ${entityCount} entities</p>
+      ${docs.length ? `<label class="field-label" for="snapshotDocument">Document</label><select class="field" id="snapshotDocument" onchange="showVersionDocument(Number(this.value))">${docs.map((doc, index) => `<option value="${index}">${esc(doc.doc_id_external)}</option>`).join("")}</select><div id="snapshotDocumentDetail"></div>` : `<p>This snapshot has no documents.</p>`}
+    </div>`;
+    if (docs.length) showVersionDocument(0);
+  } catch (e) { panel.textContent = "Could not inspect version: " + e.message; }
+}
+
+function showVersionDocument(index) {
+  const doc = S.inspectedSnapshot?.documents?.[index];
+  const panel = _qs("snapshotDocumentDetail");
+  if (!doc || !panel) return;
+  panel.innerHTML = `${doc.source ? `<p class="source-note">Source: ${esc(doc.source)}</p>` : ""}` +
+    doc.sentences.map(sentence => `<div class="sent-card"><div class="sent-meta">${esc(sentence.sentence_id_external)}</div><div class="sent-text">${esc(sentence.text)}</div>
+      <div class="snapshot-entities">${sentence.entities.map(entity => {
+        const reviews = entity.reviews || [];
+        const latest = reviews.length ? [...reviews].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)).at(-1) : null;
+        return `<span class="snapshot-entity">${esc(entity.text)} · ${esc(entity.label)} · ${esc(latest?.verdict || "unreviewed")}</span>`;
+      }).join("") || `<span class="metric-sub">No predictions</span>`}</div></div>`).join("");
+}
+
+async function compareVersion(versionId, label) {
+  const against = _qs("compareAgainst").value;
+  const panel = _qs("versionPreview");
+  panel.innerHTML = `<div class="empty-state">Comparing versions…</div>`;
+  try {
+    const diff = await api(`/projects/${S.pid}/versions/${versionId}/compare?against=${encodeURIComponent(against)}`);
+    S.versionPreview = {versionId, label, hash:diff.current_hash, against};
+    const details = diff.changes.slice(0, 150).map(c => `<div class="version-change"><span>${esc(c.document_id)} · ${esc(c.text)} <small>(${esc(c.label)})</small></span><strong>${esc(c.before || "unreviewed")} → ${esc(c.after || "unreviewed")}</strong></div>`).join("");
+    const revert = S.myRole === "owner" && against === "current" ? `<button class="btn btn-danger" onclick="revertVersion('${versionId}','${escJ(label)}')">Revert to this version</button>` : "";
+    panel.innerHTML = `<div class="version-preview"><h4>${esc(label)} compared with ${against === "current" ? "current project" : "another version"}</h4><p>${diff.changed} changed · ${diff.added} added · ${diff.removed} removed predictions</p>${details || "No entity changes."}${diff.changes.length > 150 ? `<p>Showing first 150 changes.</p>` : ""}<div style="margin-top:16px">${revert}</div></div>`;
+  } catch (e) { panel.textContent = "Could not compare versions: " + e.message; }
 }
 async function saveVersion() {
   const label = _qs("versionLabel").value.trim() || null;
@@ -931,9 +1036,10 @@ async function saveVersion() {
   } catch (e) { alert("Could not save version: " + e.message); }
 }
 async function revertVersion(versionId, label) {
+  if (!S.versionPreview || S.versionPreview.versionId !== versionId || S.versionPreview.against !== "current") return;
   if (!confirm(`Revert the project to "${label}"? This replaces all current documents, entities, and review verdicts.`)) return;
   try {
-    const result = await api(`/projects/${S.pid}/versions/${versionId}/revert`, { method: "POST" });
+    const result = await api(`/projects/${S.pid}/versions/${versionId}/revert`, { method: "POST", body:{expected_current_hash:S.versionPreview.hash} });
     alert(`Reverted: ${result.documents_restored} documents, ${result.sentences_restored} sentences, ${result.entities_restored} entities, ${result.reviews_restored} reviews restored.`);
     openProject(S.pid, S.pname);
   } catch (e) { alert("Could not revert: " + e.message); }

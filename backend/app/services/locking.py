@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from fastapi import WebSocket
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.models.document import Document
 from app.models.locking import DocumentLock
@@ -58,7 +59,10 @@ def acquire_lock(db: Session, document: Document, user: User) -> DocumentLock:
     existing = db.query(DocumentLock).filter(DocumentLock.document_id == document.id).first()
     if existing is not None:
         if existing.locked_by == user.id:
-            return existing  # same user re-locking is a no-op, not an error
+            existing.locked_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(existing)
+            return existing
         if _is_expired(existing):
             db.delete(existing)
             db.flush()
@@ -67,7 +71,11 @@ def acquire_lock(db: Session, document: Document, user: User) -> DocumentLock:
 
     lock = DocumentLock(document_id=document.id, locked_by=user.id)
     db.add(lock)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise LockError("This document is already locked by another user") from exc
     db.refresh(lock)
     return lock
 

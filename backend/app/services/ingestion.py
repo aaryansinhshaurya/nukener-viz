@@ -48,7 +48,7 @@ def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
     reader = csv.DictReader(io.StringIO(text))
 
     required_columns = {
-        "doc_id",
+        "document_id",
         "sentence_id",
         "sentence",
         "entities",
@@ -94,7 +94,10 @@ def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
                 entities.append(EntityIn(**e))
 
             sentence = SentenceIn(
-                doc_id=row["doc_id"].strip(),
+                document_id=row["document_id"].strip(),
+                filename=(row.get("filename") or "").strip() or None,
+                source=(row.get("source") or "").strip() or None,
+                cleaned_title=(row.get("cleaned_title") or "").strip() or None,
                 sentence_id=row["sentence_id"].strip(),
                 sentence=row["sentence"],
                 entities=entities,
@@ -170,8 +173,20 @@ def validate_offsets_against_text(sentences: List[SentenceIn]) -> None:
     """
 
     errors: list[str] = []
+    metadata: dict[str, tuple[str | None, str | None, str | None]] = {}
+    sentence_ids: set[tuple[str, str]] = set()
 
     for s in sentences:
+        if not s.document_id or not s.sentence_id:
+            errors.append("document_id and sentence_id cannot be empty")
+        values = (s.filename, s.source, s.cleaned_title)
+        previous = metadata.setdefault(s.document_id, values)
+        if previous != values:
+            errors.append(f"Document {s.document_id}: filename, source, and cleaned_title differ between rows")
+        key = (s.document_id, s.sentence_id)
+        if key in sentence_ids:
+            errors.append(f"Duplicate sentence_id {s.sentence_id} in document {s.document_id}")
+        sentence_ids.add(key)
 
         for e in s.entities:
 

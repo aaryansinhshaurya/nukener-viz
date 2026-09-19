@@ -1,14 +1,18 @@
 import uuid
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.user import User
 from app.models.project import Project, ProjectMember, ProjectRole, MemberStatus
-from app.models.document import Document, Sentence, Entity
-from app.models.review import Review
+from app.models.document import Document
 from app.models.locking import DocumentLock
-from app.models.version import ProjectVersion
-from app.schemas.project import ProjectCreate, ProjectOut, InviteRequest, MemberOut
+from app.models.token import ProjectInvitation
+from app.schemas.project import ProjectCreate, ProjectOut, InviteRequest, MemberOut, InvitationOut, InvitationAccept
+from app.services.tokens import new_token, token_digest
+from app.services.email import send_email, EmailDeliveryError
+from app.config import settings
 from app.auth.dependencies import get_current_user, require_project_role
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -55,7 +59,19 @@ def list_my_projects(
     project_ids = [m.project_id for m in memberships]
     if not project_ids:
         return []
-    return db.query(Project).filter(Project.id.in_(project_ids)).all()
+    projects = db.query(Project).filter(Project.id.in_(project_ids), Project.deleted_at.is_(None)).all()
+    roles = {m.project_id: m.role for m in memberships}
+    return [ProjectOut(id=p.id, name=p.name, owner_id=p.owner_id,
+                       created_at=p.created_at, deleted_at=p.deleted_at, role=roles[p.id]) for p in projects]
+
+
+@router.get("/deleted/mine", response_model=list[ProjectOut])
+def list_deleted_projects(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    recovery_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    return (db.query(Project).join(ProjectMember, ProjectMember.project_id == Project.id)
+            .filter(ProjectMember.user_id == current_user.id, ProjectMember.role == ProjectRole.OWNER,
+                    ProjectMember.status == MemberStatus.ACCEPTED,
+                    Project.deleted_at.is_not(None), Project.deleted_at >= recovery_cutoff).all())
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
@@ -72,49 +88,107 @@ def get_project(
     return project
 
 
-@router.post("/{project_id}/invite", response_model=MemberOut, status_code=status.HTTP_201_CREATED)
+@router.post("/{project_id}/invite", response_model=InvitationOut, status_code=status.HTTP_201_CREATED)
 def invite_member(
     project_id: uuid.UUID,
     payload: InviteRequest,
-    _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
+    membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
     db: Session = Depends(get_db),
 ):
-    """V1 simplification: the invited email must already have an account.
-    A 'pending invite for a not-yet-registered email' flow is a fast
-    follow-up, not required for Module 1 to work end-to-end."""
-    invited_user = db.query(User).filter(User.email == payload.email).first()
-    if invited_user is None:
-        raise HTTPException(
-            status_code=404,
-            detail="No account with that email exists yet — they need to sign up first",
-        )
+    email = payload.email.lower()
+    invited_user = db.query(User).filter(User.email == email).first()
+    if invited_user and db.query(ProjectMember).filter_by(project_id=project_id, user_id=invited_user.id).first():
+        raise HTTPException(status_code=409, detail="This user is already a member")
+    existing_invitation = db.query(ProjectInvitation).filter_by(project_id=project_id, email=email).first()
+    if existing_invitation and not (existing_invitation.accepted_at or existing_invitation.revoked_at):
+        raise HTTPException(status_code=409, detail="An invitation already exists; resend or revoke it")
+    raw, digest = new_token()
+    invitation = existing_invitation or ProjectInvitation(project_id=project_id, email=email)
+    invitation.role = payload.role
+    invitation.token_hash = digest
+    invitation.invited_by = membership.user_id
+    invitation.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    invitation.accepted_at = None
+    invitation.revoked_at = None
+    db.add(invitation)
+    db.commit()
+    project = db.get(Project, project_id)
+    try:
+        _send_invitation(invitation, project.name, raw)
+    except EmailDeliveryError as exc:
+        raise HTTPException(status_code=503, detail=f"Invitation saved but email delivery failed: {exc}") from exc
+    return _invitation_out(invitation)
 
-    existing = (
-        db.query(ProjectMember)
-        .filter(ProjectMember.project_id == project_id, ProjectMember.user_id == invited_user.id)
-        .first()
-    )
-    if existing:
-        raise HTTPException(status_code=400, detail="User is already a member of this project")
 
-    membership = ProjectMember(
-        project_id=project_id,
-        user_id=invited_user.id,
-        role=payload.role,
-        # Immediately ACCEPTED — there is no "pending invite, user must
-        # accept" flow anywhere in this app (no accept endpoint, no UI
-        # for it). Leaving this as PENDING silently locks the invited
-        # person out of the project forever, since every authorization
-        # check requires status == ACCEPTED. If a real accept-invite step
-        # is wanted later, it needs to be built as its own feature with a
-        # matching endpoint and UI — not left half-wired like this.
-        status=MemberStatus.ACCEPTED,
-        invited_by=_membership.user_id,
-    )
+def _send_invitation(invitation: ProjectInvitation, project_name: str, raw_token: str) -> None:
+    link = f"{settings.FRONTEND_URL}/?invite={quote(raw_token)}"
+    send_email(invitation.email, f"Invitation to {project_name}",
+               f"You have been invited to review {project_name} as a {invitation.role.value}.\n"
+               f"Accept within seven days: {link}\n\n"
+               "Create an account with this email address if you do not already have one.")
+
+
+def _invitation_out(invitation: ProjectInvitation) -> InvitationOut:
+    now = datetime.now(timezone.utc)
+    status_value = ("accepted" if invitation.accepted_at else "revoked" if invitation.revoked_at
+                    else "expired" if invitation.expires_at < now else "pending")
+    return InvitationOut(id=invitation.id, email=invitation.email, role=invitation.role,
+                         status=status_value, expires_at=invitation.expires_at)
+
+
+@router.get("/{project_id}/invitations", response_model=list[InvitationOut])
+def list_invitations(project_id: uuid.UUID,
+                     _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
+                     db: Session = Depends(get_db)):
+    return [_invitation_out(row) for row in db.query(ProjectInvitation).filter_by(project_id=project_id).all()]
+
+
+@router.post("/{project_id}/invitations/{invitation_id}/resend", response_model=InvitationOut)
+def resend_invitation(project_id: uuid.UUID, invitation_id: uuid.UUID,
+                      _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
+                      db: Session = Depends(get_db)):
+    row = db.query(ProjectInvitation).filter_by(project_id=project_id, id=invitation_id).first()
+    if row is None or row.accepted_at or row.revoked_at:
+        raise HTTPException(status_code=404, detail="Pending invitation not found")
+    raw, row.token_hash = new_token()
+    row.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    db.commit()
+    try:
+        _send_invitation(row, db.get(Project, project_id).name, raw)
+    except EmailDeliveryError as exc:
+        raise HTTPException(status_code=503, detail=f"Email delivery failed: {exc}") from exc
+    return _invitation_out(row)
+
+
+@router.delete("/{project_id}/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_invitation(project_id: uuid.UUID, invitation_id: uuid.UUID,
+                      _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
+                      db: Session = Depends(get_db)):
+    row = db.query(ProjectInvitation).filter_by(project_id=project_id, id=invitation_id).first()
+    if row is None or row.accepted_at:
+        raise HTTPException(status_code=404, detail="Pending invitation not found")
+    row.revoked_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+@router.post("/invitations/accept", response_model=MemberOut)
+def accept_invitation(payload: InvitationAccept, current_user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    row = db.query(ProjectInvitation).filter_by(token_hash=token_digest(payload.token)).with_for_update().first()
+    now = datetime.now(timezone.utc)
+    if row is None or row.accepted_at or row.revoked_at or row.expires_at < now:
+        raise HTTPException(status_code=400, detail="Invitation is invalid or expired")
+    if row.email != current_user.email.lower():
+        raise HTTPException(status_code=403, detail="Sign in with the invited email address")
+    if db.get(Project, row.project_id).deleted_at:
+        raise HTTPException(status_code=404, detail="Project not found")
+    membership = ProjectMember(project_id=row.project_id, user_id=current_user.id,
+                               role=row.role, status=MemberStatus.ACCEPTED, invited_by=row.invited_by)
     db.add(membership)
+    row.accepted_at = now
     db.commit()
     db.refresh(membership)
-    return _member_out(membership, invited_user)
+    return _member_out(membership, current_user)
 
 
 def _member_out(membership: ProjectMember, user: User) -> MemberOut:
@@ -195,49 +269,28 @@ def delete_project(
     _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
     db: Session = Depends(get_db),
 ):
-    """Owner-only. Permanently deletes the project and everything under
-    it. Every child table is deleted explicitly, in strict dependency
-    order, with direct bulk SQL — NOT via multi-level ORM cascade.
-
-    Multi-level cascade (relying on cascade="all, delete-orphan" through
-    documents -> sentences -> entities -> reviews) looks correct and
-    passes for small test projects, but breaks down on a real project
-    with hundreds of entities: SQLAlchemy has to lazily load each
-    collection one object at a time to figure out what to delete, and at
-    that scale the ordering can fall apart, producing exactly the
-    ForeignKeyViolation this replaces (entities deleted before the
-    reviews that still reference them). Bulk-deleting each table
-    ourselves, in the order the foreign keys actually require, is both
-    correct at any scale and far faster than 750+ individual ORM deletes.
-    """
+    """Hide a project and allow any owner to restore it for 30 days."""
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-
-    document_ids = [d.id for d in db.query(Document.id).filter(Document.project_id == project_id).all()]
-
-    if document_ids:
-        sentence_ids = [
-            s.id for s in db.query(Sentence.id).filter(Sentence.document_id.in_(document_ids)).all()
-        ]
-
-        if sentence_ids:
-            entity_ids = [
-                e.id for e in db.query(Entity.id).filter(Entity.sentence_id.in_(sentence_ids)).all()
-            ]
-
-            if entity_ids:
-                # Reviews reference entities — must go first.
-                db.query(Review).filter(Review.entity_id.in_(entity_ids)).delete(synchronize_session=False)
-                db.query(Entity).filter(Entity.id.in_(entity_ids)).delete(synchronize_session=False)
-
-            db.query(Sentence).filter(Sentence.id.in_(sentence_ids)).delete(synchronize_session=False)
-
-        db.query(DocumentLock).filter(DocumentLock.document_id.in_(document_ids)).delete(synchronize_session=False)
-        db.query(Document).filter(Document.id.in_(document_ids)).delete(synchronize_session=False)
-
-    db.query(ProjectVersion).filter(ProjectVersion.project_id == project_id).delete(synchronize_session=False)
-    db.query(ProjectMember).filter(ProjectMember.project_id == project_id).delete(synchronize_session=False)
-
-    db.delete(project)  # only the project row itself remains — safe now that every child is gone
+    project.deleted_at = datetime.now(timezone.utc)
+    db.query(DocumentLock).filter(DocumentLock.document_id.in_(
+        db.query(Document.id).filter(Document.project_id == project_id)
+    )).delete(synchronize_session=False)
     db.commit()
+
+
+@router.post("/{project_id}/restore", response_model=ProjectOut)
+def restore_project(project_id: uuid.UUID, current_user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    owner = db.query(ProjectMember).filter_by(project_id=project_id, user_id=current_user.id,
+                                               role=ProjectRole.OWNER, status=MemberStatus.ACCEPTED).first()
+    if project is None or owner is None or project.deleted_at is None:
+        raise HTTPException(status_code=404, detail="Deleted project not found")
+    if project.deleted_at < datetime.now(timezone.utc) - timedelta(days=30):
+        raise HTTPException(status_code=410, detail="The 30-day recovery window has ended")
+    project.deleted_at = None
+    db.commit()
+    db.refresh(project)
+    return project

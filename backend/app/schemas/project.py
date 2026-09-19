@@ -15,11 +15,25 @@ class ProjectOut(BaseModel):
     name: str
     owner_id: uuid.UUID
     created_at: datetime
+    deleted_at: datetime | None = None
+    role: ProjectRole | None = None
 
 
 class InviteRequest(BaseModel):
     email: EmailStr
     role: ProjectRole
+
+
+class InvitationOut(BaseModel):
+    id: uuid.UUID
+    email: EmailStr
+    role: ProjectRole
+    status: str
+    expires_at: datetime
+
+
+class InvitationAccept(BaseModel):
+    token: str
 
 
 class MemberOut(BaseModel):

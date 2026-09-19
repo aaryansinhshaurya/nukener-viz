@@ -3,7 +3,6 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
 from app.models.review import ReviewVerdict
-from app.models.document import EntitySource
 
 
 class ReviewCreate(BaseModel):
@@ -21,23 +20,3 @@ class ReviewOut(BaseModel):
     note: Optional[str] = None
     created_at: datetime
 
-
-class MissedEntityCreate(BaseModel):
-    """What a reviewer submits after click-and-dragging a span of plain
-    text the model missed."""
-
-    text: str
-    label: str
-    start_char: int
-    end_char: int
-    note: Optional[str] = None
-
-
-class MissedEntityOut(BaseModel):
-    id: uuid.UUID
-    text: str
-    label: str
-    start_char: int
-    end_char: int
-    source: EntitySource
-    review: ReviewOut

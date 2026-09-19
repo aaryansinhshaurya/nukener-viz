@@ -2,7 +2,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 from app.db import get_db, SessionLocal
-from app.models.project import ProjectMember, ProjectRole, MemberStatus
+from app.models.project import Project, ProjectMember, ProjectRole, MemberStatus
 from app.models.document import Document
 from app.models.locking import DocumentLock
 from app.models.user import User
@@ -125,6 +125,9 @@ async def project_lock_socket(websocket: WebSocket, project_id: uuid.UUID, token
             if claims.get("type") != "access":
                 raise ValueError("not an access token")
             user_id = uuid.UUID(claims["sub"])
+            user = db.get(User, user_id)
+            if user is None or claims.get("sv", 0) != user.session_version:
+                raise ValueError("session expired")
         except (ValueError, KeyError):
             await websocket.close(code=4401)
             return
@@ -138,7 +141,8 @@ async def project_lock_socket(websocket: WebSocket, project_id: uuid.UUID, token
             )
             .first()
         )
-        if membership is None:
+        project = db.get(Project, project_id)
+        if membership is None or project is None or project.deleted_at is not None:
             await websocket.close(code=4403)
             return
     finally:

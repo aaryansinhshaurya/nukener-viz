@@ -13,7 +13,7 @@ def get_latest_reviews_map(db: Session, entity_ids: list[uuid.UUID]) -> dict[uui
     reviews = (
         db.query(Review)
         .filter(Review.entity_id.in_(entity_ids))
-        .order_by(Review.created_at.desc())
+        .order_by(Review.created_at.desc(), Review.id.desc())
         .all()
     )
 

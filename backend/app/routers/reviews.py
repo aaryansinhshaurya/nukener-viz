@@ -6,8 +6,9 @@ from app.models.project import ProjectMember, ProjectRole
 from app.models.document import Document, Sentence, Entity, EntitySource
 from app.models.review import Review, ReviewVerdict
 from app.models.user import User
-from app.schemas.review import ReviewCreate, ReviewOut, MissedEntityCreate, MissedEntityOut
+from app.schemas.review import ReviewCreate, ReviewOut
 from app.auth.dependencies import require_project_role
+from app.services.locking import get_active_lock, lock_manager
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["reviews"])
 
@@ -45,7 +46,7 @@ def _to_review_out(db: Session, review: Review) -> ReviewOut:
 
 
 @router.post("/entities/{entity_id}/review", response_model=ReviewOut, status_code=status.HTTP_201_CREATED)
-def submit_review(
+async def submit_review(
     project_id: uuid.UUID,
     entity_id: uuid.UUID,
     payload: ReviewCreate,
@@ -56,11 +57,15 @@ def submit_review(
     Submitting again later (e.g. changing your mind) just adds a new row —
     the old verdict is preserved, not overwritten."""
     entity = _get_entity_in_project(db, project_id, entity_id)
+    sentence = db.get(Sentence, entity.sentence_id)
+    lock = get_active_lock(db, sentence.document_id)
+    if lock is None or lock.locked_by != membership.user_id:
+        raise HTTPException(status_code=409, detail="Lock this document before reviewing it")
 
-    if entity.source == EntitySource.HUMAN:
+    if entity.source != EntitySource.MODEL:
         raise HTTPException(
             status_code=400,
-            detail="This entity was added by a reviewer as a missed detection and is already recorded as FN.",
+            detail="Only model predictions can receive TP or FP reviews.",
         )
 
     if payload.verdict not in (ReviewVerdict.TP, ReviewVerdict.FP):
@@ -75,7 +80,7 @@ def submit_review(
     db.add(review)
     db.commit()
     db.refresh(review)
-
+    await lock_manager.broadcast(project_id, {"type": "review", "document_id": str(sentence.document_id)})
     return _to_review_out(db, review)
 
 
@@ -94,95 +99,9 @@ def list_entity_reviews(
     reviews = (
         db.query(Review)
         .filter(Review.entity_id == entity_id)
-        .order_by(Review.created_at.desc())
+        .order_by(Review.created_at.desc(), Review.id.desc())
         .all()
     )
     return [_to_review_out(db, r) for r in reviews]
 
 
-@router.post(
-    "/documents/{doc_id_external}/sentences/{sentence_id_external}/missed-entity",
-    response_model=MissedEntityOut,
-    status_code=status.HTTP_201_CREATED,
-)
-def report_missed_entity(
-    project_id: uuid.UUID,
-    doc_id_external: str,
-    sentence_id_external: str,
-    payload: MissedEntityCreate,
-    membership: ProjectMember = Depends(require_project_role(REVIEW_ROLES)),
-    db: Session = Depends(get_db),
-):
-    """The click-and-drag flow: a reviewer selects a span of plain text
-    the model missed entirely, and reports it as a False Negative. This
-    creates a brand-new entity (source=human) plus its FN review, in one
-    step — a human adding this span already *is* the verdict."""
-    sentence = (
-        db.query(Sentence)
-        .join(Document, Sentence.document_id == Document.id)
-        .filter(
-            Document.project_id == project_id,
-            Document.doc_id_external == doc_id_external,
-            Sentence.sentence_id_external == sentence_id_external,
-        )
-        .first()
-    )
-    if sentence is None:
-        raise HTTPException(status_code=404, detail="Sentence not found in this project/document")
-
-    if payload.start_char < 0 or payload.end_char <= payload.start_char or payload.end_char > len(sentence.text):
-        raise HTTPException(status_code=422, detail="start_char/end_char are out of range for this sentence")
-
-    actual_text = sentence.text[payload.start_char : payload.end_char]
-    if actual_text != payload.text:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Offsets [{payload.start_char}:{payload.end_char}] point to '{actual_text}', not '{payload.text}'",
-        )
-
-    overlap = (
-        db.query(Entity)
-        .filter(
-            Entity.sentence_id == sentence.id,
-            Entity.start_char < payload.end_char,
-            Entity.end_char > payload.start_char,
-        )
-        .first()
-    )
-    if overlap is not None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This span overlaps an existing entity ('{overlap.text}') — review that one instead of adding a new span",
-        )
-
-    entity = Entity(
-        sentence_id=sentence.id,
-        text=payload.text,
-        label=payload.label,
-        start_char=payload.start_char,
-        end_char=payload.end_char,
-        source=EntitySource.HUMAN,
-    )
-    db.add(entity)
-    db.flush()
-
-    review = Review(
-        entity_id=entity.id,
-        reviewer_id=membership.user_id,
-        verdict=ReviewVerdict.FN,
-        note=payload.note,
-    )
-    db.add(review)
-    db.commit()
-    db.refresh(entity)
-    db.refresh(review)
-
-    return MissedEntityOut(
-        id=entity.id,
-        text=entity.text,
-        label=entity.label,
-        start_char=entity.start_char,
-        end_char=entity.end_char,
-        source=entity.source,
-        review=_to_review_out(db, review),
-    )

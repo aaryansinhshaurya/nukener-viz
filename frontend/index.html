@@ -3,11 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NER Review Platform</title>
+<title>NukeNER Review</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20260919-calm-dark">
+
+<script>
+  const savedTheme = localStorage.getItem("nukener-theme");
+  document.documentElement.dataset.theme = savedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+</script>
 
 <script>
   // ╔══════════════════════════════════════════════════════╗
@@ -19,41 +24,73 @@
 </head>
 <body>
 
-<!-- ══ AUTH SCREEN ═══════════════════════════════════════ -->
-<div class="overlay" id="authOverlay">
-  <div class="modal glass">
-    <div class="modal-header">
-      <span class="modal-logo">🏷️ NER Review Platform</span>
-    </div>
-    <p class="modal-desc">Sign in with your account, or create one to get started.</p>
-    <div id="apiStatus" class="status-line"></div>
-
-    <div class="tab-toggle">
-      <button class="active" data-authtab="login" onclick="switchAuthTab('login')">Log in</button>
-      <button data-authtab="signup" onclick="switchAuthTab('signup')">Sign up</button>
-    </div>
-
-    <div id="authFormLogin">
-      <label class="field-label">Email</label>
-      <input class="field" id="loginEmail" type="email" placeholder="you@example.com" autocomplete="username">
-      <label class="field-label">Password</label>
-      <input class="field" id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password">
-      <div class="error-text" id="loginError"></div>
-      <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:6px" onclick="doLogin()">Log in</button>
+<section class="landing" id="landingPage">
+  <div class="landing-layout">
+    <header class="landing-nav">
+      <a class="landing-brand" href="/" aria-label="NukeNER Review home"><span class="landing-brand-mark" aria-hidden="true">N</span><span>NukeNER <span class="brand-muted">Review</span></span></a>
+      <button class="btn btn-ghost theme-toggle" type="button" onclick="toggleTheme()" aria-label="Switch color theme"></button>
+    </header>
+    <div class="landing-hero">
+      <div class="eyebrow">Nuclear Fusion</div>
+      <h1>NER Review Platform</h1>
+      <p>A secure workspace for NER review, review-based analysis, and export-ready annotated data.</p>
+      <div class="landing-shortcuts"><button class="btn btn-primary" type="button" onclick="openAuth('signup')">Create account</button><button class="btn btn-ghost" type="button" onclick="openAuth('login')">Log in</button></div>
+      <div class="landing-features"><span>NER</span><span>Role Based Review</span><span>Analysis</span></div>
     </div>
 
-    <div id="authFormSignup" style="display:none">
-      <label class="field-label">Name</label>
-      <input class="field" id="signupName" type="text" placeholder="e.g. Alice Sharma">
-      <label class="field-label">Email</label>
-      <input class="field" id="signupEmail" type="email" placeholder="you@example.com" autocomplete="username">
-      <label class="field-label">Password</label>
-      <input class="field" id="signupPassword" type="password" placeholder="min. 8 characters" autocomplete="new-password">
-      <div class="error-text" id="signupError"></div>
-      <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:6px" onclick="doSignup()">Create account</button>
-    </div>
+    <main class="auth-section" id="authPanel">
+      <div class="auth-card">
+        <div class="auth-heading"><div class="eyebrow brand-eyebrow">NukeNER Review</div><h2 id="authTitle">Welcome back</h2><p id="authDescription">Sign in to continue your review.</p></div>
+        <div id="apiStatus" class="auth-api-status" role="status" aria-live="polite"></div>
+        <div class="auth-tabs" id="authTabs" aria-label="Account access">
+          <button class="active" type="button" data-authtab="login" onclick="switchAuthTab('login')">Log in</button>
+          <button type="button" data-authtab="signup" onclick="switchAuthTab('signup')">Create account</button>
+        </div>
+
+        <form id="authFormLogin" onsubmit="event.preventDefault(); doLogin()">
+          <label class="field-label" for="loginEmail">Email</label>
+          <input class="field" id="loginEmail" type="email" placeholder="you@example.com" autocomplete="username" required>
+          <div class="auth-password-label"><label class="field-label" for="loginPassword">Password</label><button class="link-btn" type="button" onclick="switchAuthTab('forgot')">Forgot password?</button></div>
+          <input class="field" id="loginPassword" type="password" placeholder="Your password" autocomplete="current-password" required>
+          <div class="error-text" id="loginError" role="alert"></div>
+          <button class="btn btn-primary auth-submit" type="submit">Log in <span aria-hidden="true">→</span></button>
+        </form>
+
+        <form id="authFormSignup" style="display:none" onsubmit="event.preventDefault(); doSignup()">
+          <label class="field-label" for="signupName">Name</label>
+          <input class="field" id="signupName" type="text" placeholder="Your name" autocomplete="name" required>
+          <label class="field-label" for="signupEmail">Email</label>
+          <input class="field" id="signupEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
+          <label class="field-label" for="signupPassword">Password</label>
+          <input class="field" id="signupPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" minlength="8" required>
+          <div class="error-text" id="signupError" role="alert"></div>
+          <button class="btn btn-primary auth-submit" type="submit">Create account <span aria-hidden="true">→</span></button>
+        </form>
+
+        <form id="authFormForgot" style="display:none" onsubmit="event.preventDefault(); requestPasswordReset()">
+          <label class="field-label" for="forgotEmail">Email</label>
+          <input class="field" id="forgotEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
+          <div class="status-line" id="forgotStatus" role="status"></div>
+          <button class="btn btn-primary auth-submit" type="submit">Send reset link <span aria-hidden="true">→</span></button>
+          <button class="link-btn auth-back" type="button" onclick="switchAuthTab('login')">Back to login</button>
+        </form>
+
+        <form id="authFormReset" style="display:none" onsubmit="event.preventDefault(); submitPasswordReset()">
+          <label class="field-label" for="resetPassword">New password</label>
+          <input class="field" id="resetPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" minlength="8" required>
+          <div class="status-line" id="resetStatus" role="status"></div>
+          <button class="btn btn-primary auth-submit" type="submit">Change password <span aria-hidden="true">→</span></button>
+        </form>
+      </div>
+      <p class="auth-footnote">Your role is set inside each project you join.</p>
+    </main>
   </div>
-</div>
+</section>
+
+<section class="dashboard hidden" id="dashboardPage">
+  <header class="dashboard-header"><div><div class="eyebrow brand-eyebrow">NukeNER Review · Your workspace</div><h1 id="dashboardGreeting">Projects</h1></div><div class="dashboard-actions"><button class="btn btn-ghost theme-toggle" type="button" onclick="toggleTheme()" aria-label="Switch color theme"></button><button class="btn btn-primary" onclick="showModal()">+ New project</button><button class="btn btn-ghost" onclick="logout()">Log out</button></div></header>
+  <div class="dashboard-content"><h2>Active projects</h2><div class="dashboard-grid" id="dashboardProjects"></div><h2>Recently deleted</h2><div id="dashboardTrash" class="dashboard-trash"></div></div>
+</section>
 
 <!-- ══ PROJECT PICKER MODAL ══════════════════════════════ -->
 <div class="overlay hidden" id="overlay">
@@ -74,7 +111,7 @@
         <input type="file" id="uploadFileInput" accept=".csv,.json" style="display:none">
         <div class="upload-icon">📂</div>
         <div class="upload-label">Click to upload or drag &amp; drop</div>
-        <div class="upload-sub">CSV or JSON — doc_id, sentence_id, sentence, entities</div>
+        <div class="upload-sub">CSV or JSON — document_id, filename, source, cleaned_title, sentence_id, sentence, entities</div>
       </label>
       <div id="uploadStatus" class="status-line"></div>
     </div>
@@ -102,13 +139,13 @@
 </div>
 
 <!-- ══ APP SHELL ══════════════════════════════════════════ -->
-<div class="shell">
+<div class="shell hidden" id="appShell">
 
   <header class="topbar glass">
     <div class="topbar-brand">
       <span class="brand-icon">🏷️</span>
       <div>
-        <div class="brand-name">NER Review Platform</div>
+        <div class="brand-name">NukeNER Review</div>
         <div class="brand-sub" id="projectSubtitle">No project open</div>
       </div>
     </div>
@@ -127,6 +164,8 @@
         <span id="userPillName">You</span>
       </div>
       <button class="btn btn-ghost" onclick="showModal(); loadProjectList()">⊕ Projects</button>
+      <button class="btn btn-ghost" onclick="showDashboard()">Dashboard</button>
+      <button class="btn btn-ghost theme-toggle" type="button" onclick="toggleTheme()" aria-label="Switch color theme"></button>
       <button class="btn btn-ghost" onclick="logout()">Log out</button>
     </div>
   </header>
@@ -175,9 +214,9 @@
             <h2>Open a project to begin</h2>
             <p>Create or open a project using the <strong>⊕ Projects</strong> button above.</p>
             <div class="format-hint">
-              <div class="hint-block"><strong>CSV columns</strong><br>doc_id, sentence_id, sentence, entities<br><code>entities: [{"text":"...","label":"...","start_char":0,"end_char":3}]</code></div>
+              <div class="hint-block"><strong>CSV columns</strong><br>document_id, filename, source, cleaned_title, sentence_id, sentence, entities<br><code>entities: [{"text":"...","label":"...","start_char":0,"end_char":3}]</code></div>
               <div class="hint-block">Offsets are the source of truth; casing differences in <code>text</code> are normalized on upload when they match the span.</div>
-              <div class="hint-block"><strong>JSON</strong><br>a list of objects with the same fields, one per sentence</div>
+              <div class="hint-block"><strong>JSON</strong><br>a list of objects with the same fields, one per sentence. Filename, source, and title may be blank.</div>
             </div>
           </div>
 

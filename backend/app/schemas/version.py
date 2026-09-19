@@ -24,3 +24,7 @@ class RevertResult(BaseModel):
     sentences_restored: int
     entities_restored: int
     reviews_restored: int
+
+
+class RevertRequest(BaseModel):
+    expected_current_hash: str

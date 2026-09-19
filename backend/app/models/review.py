@@ -10,7 +10,7 @@ from app.db import Base
 class ReviewVerdict(str, enum.Enum):
     TP = "TP"
     FP = "FP"
-    FN = "FN"
+    FN = "FN"  # retained solely to read reviews saved before precision-only mode
 
 
 class Review(Base):

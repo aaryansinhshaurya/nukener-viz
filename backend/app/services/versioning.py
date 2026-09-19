@@ -1,4 +1,6 @@
 import uuid
+import hashlib
+import json
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session, selectinload
 from app.models.document import Document, Sentence, Entity, EntitySource
@@ -18,11 +20,11 @@ def _serialize_project(db: Session, project_id: uuid.UUID) -> dict:
         .all()
     )
     doc_list = []
-    for d in documents:
+    for d in sorted(documents, key=lambda item: item.doc_id_external):
         sent_list = []
-        for s in d.sentences:
+        for s in sorted(d.sentences, key=lambda item: item.sentence_id_external):
             ent_list = []
-            for e in s.entities:
+            for e in sorted(s.entities, key=lambda item: (item.start_char, item.end_char, str(item.id))):
                 reviews = [
                     {
                         "id": str(r.id),
@@ -31,7 +33,7 @@ def _serialize_project(db: Session, project_id: uuid.UUID) -> dict:
                         "note": r.note,
                         "created_at": r.created_at.isoformat(),
                     }
-                    for r in e.reviews
+                    for r in sorted(e.reviews, key=lambda item: (item.created_at, str(item.id)))
                 ]
                 ent_list.append({
                     "id": str(e.id),
@@ -51,6 +53,9 @@ def _serialize_project(db: Session, project_id: uuid.UUID) -> dict:
         doc_list.append({
             "id": str(d.id),
             "doc_id_external": d.doc_id_external,
+            "filename": d.filename,
+            "source": d.source,
+            "cleaned_title": d.cleaned_title,
             "sentences": sent_list,
         })
     return {"documents": doc_list}
@@ -79,6 +84,47 @@ def list_versions(db: Session, project_id: uuid.UUID) -> list[ProjectVersion]:
     )
 
 
+def compare_snapshots(before: dict, after: dict) -> dict:
+    """Compare current verdicts by stable entity ID; keep the response small."""
+    def index(snapshot: dict) -> dict[str, dict]:
+        result = {}
+        for document in snapshot.get("documents", []):
+            for sentence in document.get("sentences", []):
+                for entity in sentence.get("entities", []):
+                    if entity.get("source") != "model":
+                        continue
+                    reviews = entity.get("reviews", [])
+                    latest = max(reviews, key=lambda r: (r["created_at"], r["id"])) if reviews else None
+                    result[entity["id"]] = {
+                        "document_id": document["doc_id_external"],
+                        "sentence_id": sentence["sentence_id_external"],
+                        "text": entity["text"], "label": entity["label"],
+                        "verdict": latest["verdict"] if latest else None,
+                    }
+        return result
+
+    old, new = index(before), index(after)
+    changes = []
+    for entity_id in sorted(old.keys() | new.keys()):
+        previous, current = old.get(entity_id), new.get(entity_id)
+        if previous == current:
+            continue
+        item = current or previous
+        changes.append({"entity_id": entity_id, **{k: item[k] for k in ("document_id", "sentence_id", "text", "label")},
+                        "before": previous["verdict"] if previous else None,
+                        "after": current["verdict"] if current else None,
+                        "kind": "added" if previous is None else "removed" if current is None else "changed"})
+    return {"before_entities": len(old), "after_entities": len(new),
+            "added": sum(c["kind"] == "added" for c in changes),
+            "removed": sum(c["kind"] == "removed" for c in changes),
+            "changed": sum(c["kind"] == "changed" for c in changes),
+            "changes": changes}
+
+
+def snapshot_hash(snapshot: dict) -> str:
+    return hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 class RevertCounts:
     def __init__(self):
         self.documents = 0
@@ -105,6 +151,9 @@ def revert_to_version(db: Session, project_id: uuid.UUID, version: ProjectVersio
             id=uuid.UUID(doc_blob["id"]),
             project_id=project_id,
             doc_id_external=doc_blob["doc_id_external"],
+            filename=doc_blob.get("filename"),
+            source=doc_blob.get("source"),
+            cleaned_title=doc_blob.get("cleaned_title"),
         )
         db.add(document)
         db.flush()
