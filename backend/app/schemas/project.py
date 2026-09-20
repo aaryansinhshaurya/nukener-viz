@@ -32,6 +32,17 @@ class InvitationOut(BaseModel):
     expires_at: datetime
 
 
+class InvitationLinkOut(InvitationOut):
+    url: str
+
+
+class InvitationPreviewOut(BaseModel):
+    project_name: str
+    email: EmailStr
+    role: ProjectRole
+    expires_at: datetime
+
+
 class InvitationAccept(BaseModel):
     token: str
 

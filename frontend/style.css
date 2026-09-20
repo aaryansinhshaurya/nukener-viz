@@ -389,6 +389,16 @@ code { font-family: "DM Mono", ui-monospace, monospace; font-size: 12px; }
 .invite-box { padding: 8px 10px; border-radius: 8px; }
 .invite-ok { background: rgba(18,164,84,.1); color: var(--ok); }
 .invite-warn { background: rgba(229,72,77,.1); color: var(--bad); }
+.invite-preview { background: var(--soft-surface); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 14px 16px; line-height: 1.5; }
+.invite-preview strong { display: block; color: var(--t1); font-size: 14px; }
+.invite-preview p { margin: 4px 0 0; color: var(--t2); }
+.invite-preview .btn { margin-top: 10px; }
+.auth-card .invite-preview { margin-bottom: 14px; }
+.invite-preview.warn { border-color: rgba(229,72,77,.3); color: var(--bad); }
+.share-link-panel { display: flex; align-items: center; gap: 8px; padding: 10px 0 14px; flex-wrap: wrap; }
+.invitation-row .btn-group { flex-wrap: wrap; }
+.share-link-panel .field { flex: 1 1 260px; min-width: 0; }
+.share-link-note { width: 100%; color: var(--t3); font-size: 11px; }
 
 /* ── Versions ──────────────────────────────────────────────── */
 .version-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
@@ -450,6 +460,8 @@ code { font-family: "DM Mono", ui-monospace, monospace; font-size: 12px; }
   .auth-card { padding: 24px; }
   .dashboard-actions { gap: 8px; }
   .dashboard-content { padding: 12px 20px 60px; }
+  .invite-row { flex-direction: column; }
+  .invitation-row { align-items: flex-start; flex-direction: column; }
 }
 
 @media (max-width: 860px) {

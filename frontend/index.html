@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="no-referrer">
 <title>NukeNER Review</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -41,6 +42,7 @@
     <main class="auth-section" id="authPanel">
       <div class="auth-card">
         <div class="auth-heading"><div class="eyebrow brand-eyebrow">NukeNER Review</div><h2 id="authTitle">Welcome back</h2><p id="authDescription">Sign in to continue your review.</p></div>
+        <div id="inviteIntro" class="invite-preview hidden" role="status" aria-live="polite"></div>
         <div id="apiStatus" class="auth-api-status" role="status" aria-live="polite"></div>
         <div class="auth-tabs" id="authTabs" aria-label="Account access">
           <button class="active" type="button" data-authtab="login" onclick="switchAuthTab('login')">Log in</button>
@@ -89,7 +91,7 @@
 
 <section class="dashboard hidden" id="dashboardPage">
   <header class="dashboard-header"><div><div class="eyebrow brand-eyebrow">NukeNER Review · Your workspace</div><h1 id="dashboardGreeting">Projects</h1></div><div class="dashboard-actions"><button class="btn btn-ghost theme-toggle" type="button" onclick="toggleTheme()" aria-label="Switch color theme"></button><button class="btn btn-primary" onclick="showModal()">+ New project</button><button class="btn btn-ghost" onclick="logout()">Log out</button></div></header>
-  <div class="dashboard-content"><h2>Active projects</h2><div class="dashboard-grid" id="dashboardProjects"></div><h2>Recently deleted</h2><div id="dashboardTrash" class="dashboard-trash"></div></div>
+  <div class="dashboard-content"><div id="pendingInviteBanner" class="invite-preview hidden" role="status" aria-live="polite"></div><h2>Active projects</h2><div class="dashboard-grid" id="dashboardProjects"></div><h2>Recently deleted</h2><div id="dashboardTrash" class="dashboard-trash"></div></div>
 </section>
 
 <!-- ══ PROJECT PICKER MODAL ══════════════════════════════ -->

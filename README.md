@@ -25,29 +25,19 @@ Copy-Item .env.example .env
 
 Run the frontend using any static file server. The default API URL in `frontend/index.html` points to Render; change it to `http://localhost:8000` for local end-to-end testing. Add the frontend origin to `FRONTEND_ORIGINS` in the backend environment.
 
-## Email and accounts
+## Sharing projects
 
-Set `FRONTEND_URL` to the Vercel origin so invitation and reset links open the correct site. **Render Free blocks SMTP ports 25, 465, and 587**, so Gmail SMTP cannot send from a Free backend. For a small private project, use the [Apps Script mail web app](backend/google_apps_script/Code.gs):
+Owners share the existing project from its **Team** tab. Enter a coworker's email and role, choose **Create share link**, then use **Copy link** and send it yourself. No invitation email or Google Apps Script is used.
 
-1. Create a Google Apps Script project and replace its entire `Code.gs` with that file. Save it.
-2. In **Project Settings > Script Properties**, add `MAIL_SECRET` with a long random value. Do not include backslashes in the property name. Select `authorizeMail` in the editor, click **Run**, and grant the requested Google mail permission.
-3. Choose **Deploy > New deployment > Web app**. Set **Execute as: Me** and **Who has access: Anyone**. Copy the deployed URL ending in `/exec`. If you later edit the script, use **Deploy > Manage deployments > Edit > New version > Deploy** so `/exec` runs the new code.
-4. In the Render **backend service > Environment**, set `APPS_SCRIPT_MAIL_URL` to that full `/exec` URL and `APPS_SCRIPT_MAIL_SECRET` to the exact same value as `MAIL_SECRET`. Set `FRONTEND_URL` to the frontend origin. Save and redeploy. A Resend key and `EMAIL_FROM` are not needed when using Apps Script; remove placeholder values such as `value`.
-5. Open the `/exec` URL in an incognito browser window. Its JSON response should say the mail endpoint is running. This checks `doGet` and anonymous access only; an actual password reset for an existing account or a project invitation checks `doPost` and `MailApp`. If sending fails, check **Executions** in Apps Script and the Render backend log. Resend previously saved invitations from the project's **Team** tab.
+A saved pending invitation from the earlier email flow remains available. Choose **Generate link** beside it to issue a fresh link for the same invitation record. The old token cannot be displayed because only its hash is stored. Each new link expires after seven days and replaces any previous link for that invitation. **Revoke** stops an unused link. The coworker opens the link, signs up or signs in with the invited email, reviews the project name and role, and explicitly accepts. The same project then appears on their dashboard; no new project or dataset upload is required.
 
-The backend sends JSON containing `secret`, `to`, `subject`, and `body`, and accepts success only after the script returns `{"ok": true}`. Keep the shared secret out of GitHub and the frontend. Deployment ID and Script ID are not needed by the backend. Apps Script takes priority over the providers below. An incomplete Apps Script configuration is reported as unavailable instead of falling back to another provider.
+Set `FRONTEND_URL` to the frontend origin so copied links point to the deployed app. Owners receive the raw link only when they create or regenerate it. The backend stores only its hash.
 
-Apps Script sends from the Google account that deployed the web app. The script's `name: "NukeNER-Viz"` changes the visible sender name, not the sender email address. If an invitation fails, inspect the matching `doPost` execution and its logs in Apps Script, then the Render backend log. The text `Apps Script email delivery failed` comes from an older backend version; deploy the current backend to get a more specific error. The invitation remains pending, so use **Team > Resend** after fixing delivery. Editing `Code.gs` also requires deploying a new Apps Script version.
+## Password reset email
 
-Alternatively, this project supports Resend's HTTPS API:
+Password reset still requires an email provider. Configure `RESEND_API_KEY` and `EMAIL_FROM` for Resend, or the SMTP settings in [backend/.env.example](backend/.env.example) on a host that permits SMTP. If no provider is configured, the password reset endpoint returns 503. Password reset links expire after one hour and are single-use. Invitations do not depend on this email configuration.
 
-1. In [Resend](https://resend.com/docs/dashboard/domains/introduction), add a domain you control and complete its DNS verification. Create an API key in Resend's **API Keys** page; its value starts with `re_`.
-2. In the Render **backend service → Environment**, replace the placeholder `value`: set `RESEND_API_KEY` to that generated key, `EMAIL_FROM` to a sender on the verified domain (for example, `NukeNER Review <review@your-domain.example>`), and `FRONTEND_URL` to your exact Vercel origin. Keep the key on the backend only.
-3. Save the environment and deploy the current backend code. Test **Forgot password** with an existing account. In a project's **Team** tab, use **Resend** for invitations that were saved while email was unavailable.
-
-Resend's test sender is limited; use a verified domain to send invitations to other people. An alternative is a paid Render service with SMTP enabled and a Gmail app password, which requires Google 2-Step Verification. Do not use your normal Gmail password as `SMTP_PASSWORD`.
-
-SMTP remains supported on hosts that allow it: set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, and SMTP_TLS. Invitations and password resets use the configured provider. If delivery is unavailable, the reset endpoint returns 503 and the button remains available for a retry. Existing pending invitations can be resent after the provider is configured. Password reset links expire after one hour and are single-use.
+The Google Apps Script integration has been removed from the backend. Remove `APPS_SCRIPT_MAIL_URL` and `APPS_SCRIPT_MAIL_SECRET` from Render; you can delete the script from your Google account.
 
 ## Repairing entities in an existing project
 

@@ -19,7 +19,7 @@ let S = {
   locks: {},                // doc_id_external -> {locked_by, locked_by_name}
   ws: null, wsRetry: null,
   tab: "annotate",
-  pendingInvite: null, resetToken: null,
+  pendingInvite: null, invitePreview: null, invitePreviewError: "", shareLinks: {}, confirmRevokeId: null, resetToken: null,
 };
 
 const ONTOLOGY = {
@@ -134,6 +134,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     openAuth('reset');
   } else if (S.pendingInvite) {
     openAuth('signup');
+    await loadInvitationPreview();
   }
   const savedRefresh = localStorage.getItem("ner_refresh_token");
   if (savedRefresh && !S.resetToken) {
@@ -196,6 +197,75 @@ function openAuth(tab) {
   }
   const firstField = {login:"loginEmail", signup:"signupName", forgot:"forgotEmail", reset:"resetPassword"}[tab];
   if (firstField) _qs(firstField).focus({preventScroll:true});
+}
+
+async function loadInvitationPreview() {
+  if (!S.pendingInvite) return;
+  try {
+    S.invitePreview = await api(`/projects/invitations/preview?token=${encodeURIComponent(S.pendingInvite)}`, {auth:false});
+    S.invitePreviewError = "";
+    _qs("signupEmail").value = S.invitePreview.email;
+    _qs("loginEmail").value = S.invitePreview.email;
+  } catch (e) {
+    S.invitePreview = null;
+    S.invitePreviewError = e.message;
+  }
+  renderInvitationIntro();
+  renderPendingInvite();
+}
+
+function renderInvitationIntro() {
+  const box = _qs("inviteIntro");
+  if (!S.pendingInvite) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  box.classList.toggle("warn", !S.invitePreview);
+  if (!S.invitePreview) {
+    box.textContent = S.invitePreviewError || "Loading invitation...";
+    return;
+  }
+  const invitation = S.invitePreview;
+  box.innerHTML = `<strong>Invitation to ${esc(invitation.project_name)}</strong><p>${esc(invitation.role)} access for ${esc(invitation.email)}. Sign in or create an account with that email to review the invitation.</p>`;
+}
+
+function renderPendingInvite() {
+  const box = _qs("pendingInviteBanner");
+  if (!S.pendingInvite || !S.meId) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  box.classList.toggle("warn", !S.invitePreview || S.meEmail.toLowerCase() !== S.invitePreview.email.toLowerCase());
+  if (!S.invitePreview) {
+    box.textContent = S.invitePreviewError || "Loading invitation...";
+    return;
+  }
+  const invitation = S.invitePreview;
+  if (S.meEmail.toLowerCase() !== invitation.email.toLowerCase()) {
+    box.innerHTML = `<strong>Invitation to ${esc(invitation.project_name)}</strong><p>This ${esc(invitation.role)} invitation is for ${esc(invitation.email)}. You are signed in as ${esc(S.meEmail)}.</p><button class="btn btn-ghost" type="button" onclick="logout()">Switch account</button>`;
+    return;
+  }
+  box.innerHTML = `<strong>Join ${esc(invitation.project_name)}?</strong><p>You were invited as a ${esc(invitation.role)}. The link expires ${new Date(invitation.expires_at).toLocaleDateString()}.</p><button class="btn btn-primary" id="acceptInviteButton" type="button" onclick="acceptPendingInvitation()">Accept invitation</button><div class="status-line" id="acceptInviteStatus" role="status"></div>`;
+}
+
+async function acceptPendingInvitation() {
+  if (!S.pendingInvite || !S.invitePreview) return;
+  const button = _qs("acceptInviteButton");
+  const status = _qs("acceptInviteStatus");
+  button.disabled = true;
+  status.textContent = "Joining project...";
+  try {
+    const projectName = S.invitePreview.project_name;
+    await api("/projects/invitations/accept", {method:"POST", body:{token:S.pendingInvite}});
+    S.pendingInvite = null;
+    S.invitePreview = null;
+    S.invitePreviewError = "";
+    history.replaceState({}, "", location.pathname);
+    renderInvitationIntro();
+    await loadProjectList();
+    const box = _qs("pendingInviteBanner");
+    box.classList.remove("hidden", "warn");
+    box.innerHTML = `<strong>Invitation accepted</strong><p>${esc(projectName)} is now in your projects.</p>`;
+  } catch (e) {
+    status.textContent = e.message;
+    button.disabled = false;
+  }
 }
 
 function switchAuthTab(tab) {
@@ -288,15 +358,6 @@ async function afterLogin() {
   _qs("userPillName").textContent = S.meName;
   _qs("userAvatar").textContent = (S.meName[0] || "?").toUpperCase();
   showDashboard();
-  if (S.pendingInvite) {
-    try {
-      await api("/projects/invitations/accept", {method:"POST", body:{token:S.pendingInvite}});
-      S.pendingInvite = null;
-      history.replaceState({}, "", location.pathname);
-      await loadProjectList();
-      alert("Invitation accepted. The project is now in your dashboard.");
-    } catch (e) { alert("Could not accept invitation: " + e.message); }
-  }
 }
 
 function showDashboard() {
@@ -310,6 +371,7 @@ function showDashboard() {
   _qs("dashboardGreeting").textContent = `Welcome, ${S.meName.split(" ")[0]}`;
   loadProjectList();
   loadTrash();
+  renderPendingInvite();
 }
 
 function logout() {
@@ -318,7 +380,7 @@ function logout() {
   localStorage.removeItem("ner_refresh_token");
   S = Object.assign(S, {
     accessToken: null, refreshToken: null, meId: null, meName: "", meEmail: "",
-    pid: null, pname: "", myRole: null, ownerId: null,
+    pid: null, pname: "", myRole: null, ownerId: null, shareLinks: {}, confirmRevokeId: null,
   });
   resetUI();
   _qs("userPill").style.display = "none";
@@ -326,6 +388,7 @@ function logout() {
   _qs("dashboardPage").classList.add("hidden");
   _qs("appShell").classList.add("hidden");
   _qs("landingPage").classList.remove("hidden");
+  renderInvitationIntro();
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -941,8 +1004,8 @@ function renderTeam(members, invitations = []) {
   let inviteForm = "";
   if (S.myRole === "owner") {
     inviteForm = `<div class="invite-form">
-      <h4>Invite a collaborator</h4>
-      <p style="font-size:12.5px;color:var(--t2);margin:2px 0 0">They can sign up after receiving the invitation email.</p>
+      <h4>Share this project</h4>
+      <p style="font-size:12.5px;color:var(--t2);margin:2px 0 0">Choose a coworker's email and role, then copy their private link and send it yourself.</p>
       <div class="invite-row">
         <input class="field" id="inviteEmail" type="email" placeholder="colleague@example.com" style="flex:2">
         <select class="field" id="inviteRole" style="flex:1">
@@ -950,38 +1013,76 @@ function renderTeam(members, invitations = []) {
           <option value="viewer">Viewer</option>
           <option value="owner">Owner</option>
         </select>
-        <button class="btn btn-primary" onclick="inviteMember()">Invite</button>
+        <button class="btn btn-primary" type="button" onclick="createShareLink()">Create share link</button>
       </div>
       <div class="invite-result" id="inviteResult"></div>
     </div>`;
   }
-  const invites = S.myRole === "owner" ? `<h4>Invitations</h4>${invitations.length ? invitations.map(i => `
-    <div class="invitation-row"><div><strong>${esc(i.email)}</strong> · ${esc(i.role)}<br><small>${esc(i.status)} · expires ${new Date(i.expires_at).toLocaleDateString()}</small></div>
-    ${i.status === "pending" || i.status === "expired" ? `<div class="btn-group"><button class="btn-tiny" onclick="resendInvitation('${i.id}')">Resend</button><button class="btn-tiny danger" onclick="revokeInvitation('${i.id}')">Revoke</button></div>` : ""}</div>`).join("") : `<div class="empty-state">No invitations yet.</div>`}` : "";
+  const invites = S.myRole === "owner" ? `<h4>Invitations</h4>${invitations.length ? invitations.map(i => {
+    const active = i.status === "pending" || i.status === "expired";
+    const link = S.shareLinks[i.id];
+    const revokeControls = S.confirmRevokeId === i.id
+      ? `<span>Revoke this invitation?</span><button class="btn-tiny danger" type="button" onclick="revokeInvitation('${i.id}')">Confirm revoke</button><button class="btn-tiny" type="button" onclick="cancelRevokeInvitation()">Cancel</button>`
+      : `<button class="btn-tiny danger" type="button" onclick="requestRevokeInvitation('${i.id}')">Revoke</button>`;
+    return `<div class="invitation-row"><div><strong>${esc(i.email)}</strong> · ${esc(i.role)}<br><small>${esc(i.status)} · expires ${new Date(i.expires_at).toLocaleDateString()}</small></div>
+      ${active ? `<div class="btn-group"><button class="btn-tiny" type="button" onclick="generateInvitationLink('${i.id}')">Generate link</button>${revokeControls}</div>` : ""}</div>
+      ${i.status === "pending" && link ? `<div class="share-link-panel"><input class="field" id="shareLink-${i.id}" type="text" readonly value="${escA(link)}" aria-label="Share link for ${escA(i.email)}"><button class="btn btn-primary" type="button" onclick="copyShareLink('${i.id}')">Copy link</button><span id="shareLinkStatus-${i.id}" role="status"></span><span class="share-link-note">Send this link to ${esc(i.email)}. It works once and expires ${new Date(i.expires_at).toLocaleDateString()}. Generating another link invalidates this one.</span></div>` : ""}`;
+  }).join("") : `<div class="empty-state">No invitations yet.</div>`}` : "";
   _qs("teamPanel").innerHTML = `<div class="team-grid">${rows}</div>${inviteForm}${invites}`;
 }
-async function inviteMember() {
+async function createShareLink() {
   const email = _qs("inviteEmail").value.trim();
   const role = _qs("inviteRole").value;
   const resEl = _qs("inviteResult");
-  if (!email) return;
+  if (!email) { resEl.textContent = "Enter your coworker's email address."; return; }
   try {
-    await api(`/projects/${S.pid}/invite`, { method: "POST", body: { email, role } });
-    resEl.innerHTML = `<div class="invite-box invite-ok">Invitation email sent to ${esc(email)}.</div>`;
-    loadTeam();
+    const invitation = await api(`/projects/${S.pid}/share-link`, { method: "POST", body: { email, role } });
+    S.shareLinks[invitation.id] = invitation.url;
+    await loadTeam();
+    _qs(`shareLink-${invitation.id}`)?.focus({preventScroll:true});
   } catch (e) {
     resEl.innerHTML = `<div class="invite-box invite-warn">⚠️ ${esc(e.message)}</div>`;
   }
 }
 
-async function resendInvitation(id) {
-  try { await api(`/projects/${S.pid}/invitations/${id}/resend`, {method:"POST"}); loadTeam(); }
-  catch (e) { alert("Could not resend invitation: " + e.message); }
+async function generateInvitationLink(id) {
+  try {
+    const invitation = await api(`/projects/${S.pid}/invitations/${id}/link`, {method:"POST"});
+    S.shareLinks[id] = invitation.url;
+    await loadTeam();
+    _qs(`shareLink-${id}`)?.focus({preventScroll:true});
+  } catch (e) {
+    _qs("inviteResult").innerHTML = `<div class="invite-box invite-warn">${esc(e.message)}</div>`;
+  }
 }
+async function copyShareLink(id) {
+  const url = S.shareLinks[id];
+  if (!url) return;
+  const status = _qs(`shareLinkStatus-${id}`);
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(url);
+    else {
+      const input = _qs(`shareLink-${id}`);
+      input.focus(); input.select();
+      if (!document.execCommand("copy")) throw new Error("Copy unavailable");
+    }
+    status.textContent = "Copied";
+  } catch (_) {
+    status.textContent = "Select and copy the link above.";
+    _qs(`shareLink-${id}`)?.select();
+  }
+}
+function requestRevokeInvitation(id) { S.confirmRevokeId = id; loadTeam(); }
+function cancelRevokeInvitation() { S.confirmRevokeId = null; loadTeam(); }
 async function revokeInvitation(id) {
-  if (!confirm("Revoke this invitation?")) return;
-  try { await api(`/projects/${S.pid}/invitations/${id}`, {method:"DELETE"}); loadTeam(); }
-  catch (e) { alert("Could not revoke invitation: " + e.message); }
+  try {
+    await api(`/projects/${S.pid}/invitations/${id}`, {method:"DELETE"});
+    delete S.shareLinks[id];
+    S.confirmRevokeId = null;
+    await loadTeam();
+  } catch (e) {
+    _qs("inviteResult").innerHTML = `<div class="invite-box invite-warn">${esc(e.message)}</div>`;
+  }
 }
 
 async function removeMember(memberId, displayName) {

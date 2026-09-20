@@ -1,8 +1,7 @@
-import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.user import User
@@ -10,14 +9,13 @@ from app.models.project import Project, ProjectMember, ProjectRole, MemberStatus
 from app.models.document import Document
 from app.models.locking import DocumentLock
 from app.models.token import ProjectInvitation
-from app.schemas.project import ProjectCreate, ProjectOut, InviteRequest, MemberOut, InvitationOut, InvitationAccept
+from app.schemas.project import (ProjectCreate, ProjectOut, InviteRequest, MemberOut,
+                                 InvitationOut, InvitationLinkOut, InvitationPreviewOut, InvitationAccept)
 from app.services.tokens import new_token, token_digest
-from app.services.email import send_email, EmailDeliveryError
 from app.config import settings
 from app.auth.dependencies import get_current_user, require_project_role
 
 router = APIRouter(prefix="/projects", tags=["projects"])
-logger = logging.getLogger(__name__)
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
@@ -90,20 +88,24 @@ def get_project(
     return project
 
 
-@router.post("/{project_id}/invite", response_model=InvitationOut, status_code=status.HTTP_201_CREATED)
-def invite_member(
+@router.post("/{project_id}/share-link", response_model=InvitationLinkOut, status_code=status.HTTP_201_CREATED)
+def create_share_link(
     project_id: uuid.UUID,
     payload: InviteRequest,
+    response: Response,
     membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
     db: Session = Depends(get_db),
 ):
+    project = db.get(Project, project_id)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Project not found")
     email = payload.email.lower()
     invited_user = db.query(User).filter(User.email == email).first()
     if invited_user and db.query(ProjectMember).filter_by(project_id=project_id, user_id=invited_user.id).first():
         raise HTTPException(status_code=409, detail="This user is already a member")
     existing_invitation = db.query(ProjectInvitation).filter_by(project_id=project_id, email=email).first()
     if existing_invitation and not (existing_invitation.accepted_at or existing_invitation.revoked_at):
-        raise HTTPException(status_code=409, detail="An invitation already exists; resend or revoke it")
+        raise HTTPException(status_code=409, detail="An invitation already exists; generate a link for it below")
     raw, digest = new_token()
     invitation = existing_invitation or ProjectInvitation(project_id=project_id, email=email)
     invitation.role = payload.role
@@ -114,21 +116,8 @@ def invite_member(
     invitation.revoked_at = None
     db.add(invitation)
     db.commit()
-    project = db.get(Project, project_id)
-    try:
-        _send_invitation(invitation, project.name, raw)
-    except EmailDeliveryError as exc:
-        logger.exception("Project invitation email delivery failed")
-        raise HTTPException(status_code=503, detail=f"Invitation saved but email delivery failed: {exc}") from exc
-    return _invitation_out(invitation)
-
-
-def _send_invitation(invitation: ProjectInvitation, project_name: str, raw_token: str) -> None:
-    link = f"{settings.FRONTEND_URL}/?invite={quote(raw_token)}"
-    send_email(invitation.email, f"Invitation to {project_name}",
-               f"You have been invited to review {project_name} as a {invitation.role.value}.\n"
-               f"Accept within seven days: {link}\n\n"
-               "Create an account with this email address if you do not already have one.")
+    response.headers["Cache-Control"] = "no-store"
+    return _invitation_link_out(invitation, raw)
 
 
 def _invitation_out(invitation: ProjectInvitation) -> InvitationOut:
@@ -139,6 +128,25 @@ def _invitation_out(invitation: ProjectInvitation) -> InvitationOut:
                          status=status_value, expires_at=invitation.expires_at)
 
 
+def _invitation_link_out(invitation: ProjectInvitation, raw_token: str) -> InvitationLinkOut:
+    return InvitationLinkOut(**_invitation_out(invitation).model_dump(),
+                             url=f"{settings.FRONTEND_URL}/?invite={quote(raw_token)}")
+
+
+@router.get("/invitations/preview", response_model=InvitationPreviewOut)
+def preview_invitation(token: str, response: Response, db: Session = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    row = db.query(ProjectInvitation).filter_by(token_hash=token_digest(token)).first()
+    now = datetime.now(timezone.utc)
+    if row is None or row.accepted_at or row.revoked_at or row.expires_at < now:
+        raise HTTPException(status_code=400, detail="Invitation is invalid or expired")
+    project = db.get(Project, row.project_id)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return InvitationPreviewOut(project_name=project.name, email=row.email,
+                                role=row.role, expires_at=row.expires_at)
+
+
 @router.get("/{project_id}/invitations", response_model=list[InvitationOut])
 def list_invitations(project_id: uuid.UUID,
                      _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
@@ -146,29 +154,28 @@ def list_invitations(project_id: uuid.UUID,
     return [_invitation_out(row) for row in db.query(ProjectInvitation).filter_by(project_id=project_id).all()]
 
 
-@router.post("/{project_id}/invitations/{invitation_id}/resend", response_model=InvitationOut)
-def resend_invitation(project_id: uuid.UUID, invitation_id: uuid.UUID,
-                      _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
-                      db: Session = Depends(get_db)):
-    row = db.query(ProjectInvitation).filter_by(project_id=project_id, id=invitation_id).first()
+@router.post("/{project_id}/invitations/{invitation_id}/link", response_model=InvitationLinkOut)
+def generate_invitation_link(project_id: uuid.UUID, invitation_id: uuid.UUID, response: Response,
+                             _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
+                             db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    row = db.query(ProjectInvitation).filter_by(project_id=project_id, id=invitation_id).with_for_update().first()
     if row is None or row.accepted_at or row.revoked_at:
         raise HTTPException(status_code=404, detail="Pending invitation not found")
     raw, row.token_hash = new_token()
     row.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     db.commit()
-    try:
-        _send_invitation(row, db.get(Project, project_id).name, raw)
-    except EmailDeliveryError as exc:
-        logger.exception("Project invitation resend email delivery failed")
-        raise HTTPException(status_code=503, detail=f"Email delivery failed: {exc}") from exc
-    return _invitation_out(row)
+    response.headers["Cache-Control"] = "no-store"
+    return _invitation_link_out(row, raw)
 
 
 @router.delete("/{project_id}/invitations/{invitation_id}", status_code=status.HTTP_204_NO_CONTENT)
 def revoke_invitation(project_id: uuid.UUID, invitation_id: uuid.UUID,
                       _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
                       db: Session = Depends(get_db)):
-    row = db.query(ProjectInvitation).filter_by(project_id=project_id, id=invitation_id).first()
+    row = db.query(ProjectInvitation).filter_by(project_id=project_id, id=invitation_id).with_for_update().first()
     if row is None or row.accepted_at:
         raise HTTPException(status_code=404, detail="Pending invitation not found")
     row.revoked_at = datetime.now(timezone.utc)
