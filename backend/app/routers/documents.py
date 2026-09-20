@@ -3,9 +3,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from sqlalchemy.orm import Session, selectinload
 from app.db import get_db
 from app.models.project import ProjectMember, ProjectRole
-from app.models.document import Document, Sentence, Entity
+from app.models.document import Document, Sentence, Entity, EntitySource
 from app.models.user import User
-from app.schemas.document import UploadSummary, DocumentSummaryOut, DocumentDetailOut, SentenceOut, EntityOut
+from app.schemas.document import UploadSummary, DocumentSummaryOut, DocumentDetailOut, SentenceOut, EntityOut, SentenceIn
 from app.schemas.review import ReviewOut
 from app.auth.dependencies import require_project_role
 from app.services.ingestion import parse_csv, parse_json, validate_offsets_against_text, IngestionError
@@ -24,20 +24,7 @@ def upload_dataset(
     _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
     db: Session = Depends(get_db),
 ):
-    """Owner-only. Parses a CSV or JSON file into Document -> Sentence ->
-    Entity rows. Supported once per project — versioning (save/revert)
-    checkpoints the review state on top of this data, it doesn't replace
-    the underlying dataset with a new upload."""
-    existing = db.query(Document).filter(Document.project_id == project_id).first()
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "This project already has a dataset uploaded. Re-uploading a "
-                "different CSV/JSON onto an existing project isn't supported — "
-                "start a new project instead."
-            ),
-        )
+    """Create a dataset, or add missing predictions from the same dataset."""
 
     raw = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
     if len(raw) > settings.MAX_UPLOAD_BYTES:
@@ -55,6 +42,15 @@ def upload_dataset(
         validate_offsets_against_text(sentences)
     except IngestionError as exc:
         raise HTTPException(status_code=422, detail={"errors": exc.errors})
+
+    existing_documents = (
+        db.query(Document)
+        .options(selectinload(Document.sentences).selectinload(Sentence.entities))
+        .filter(Document.project_id == project_id)
+        .all()
+    )
+    if existing_documents:
+        return _add_missing_entities(db, existing_documents, sentences)
 
     doc_map: dict[str, Document] = {}
     sentences_created = 0
@@ -98,6 +94,48 @@ def upload_dataset(
         entities_created=entities_created,
         entities_skipped_missing_offsets=skipped_entities,
     )
+
+
+def _add_missing_entities(db: Session, documents: list[Document], sentences: list[SentenceIn]) -> UploadSummary:
+    """Repair an old import while preserving its reviews and document IDs."""
+    existing = {
+        (document.doc_id_external, sentence.sentence_id_external): sentence
+        for document in documents for sentence in document.sentences
+    }
+    uploaded = {(sentence.document_id, sentence.sentence_id) for sentence in sentences}
+    if uploaded != set(existing):
+        raise HTTPException(
+            status_code=409,
+            detail="This project has a different set of documents or sentences. Re-upload the original dataset to add missing entities.",
+        )
+
+    for sentence in sentences:
+        stored = existing[(sentence.document_id, sentence.sentence_id)]
+        if stored.text != sentence.sentence:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Sentence {sentence.sentence_id} differs from the existing dataset. No entities were added.",
+            )
+
+    added = 0
+    for sentence in sentences:
+        stored = existing[(sentence.document_id, sentence.sentence_id)]
+        known = {
+            (entity.start_char, entity.end_char, entity.label)
+            for entity in stored.entities if entity.source == EntitySource.MODEL
+        }
+        for entity in sentence.entities:
+            key = (entity.start_char, entity.end_char, entity.label)
+            if key in known:
+                continue
+            db.add(Entity(
+                sentence_id=stored.id, text=entity.text, label=entity.label,
+                start_char=entity.start_char, end_char=entity.end_char,
+            ))
+            known.add(key)
+            added += 1
+    db.commit()
+    return UploadSummary(documents_created=0, sentences_created=0, entities_created=added)
 
 
 @router.get("/documents", response_model=list[DocumentSummaryOut])

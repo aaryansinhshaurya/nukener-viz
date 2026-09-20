@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=20260919-calm-dark">
+<link rel="stylesheet" href="style.css?v=20260920-layout">
 
 <script>
   const savedTheme = localStorage.getItem("nukener-theme");
@@ -111,7 +111,7 @@
         <input type="file" id="uploadFileInput" accept=".csv,.json" style="display:none">
         <div class="upload-icon">📂</div>
         <div class="upload-label">Click to upload or drag &amp; drop</div>
-        <div class="upload-sub">CSV or JSON — document_id, filename, source, cleaned_title, sentence_id, sentence, entities. Entity offsets are optional when text matches the sentence.</div>
+        <div class="upload-sub">CSV or JSON — document_id, filename, source, cleaned_title, sentence_id, sentence, entities. Entity offsets are optional. Re-upload the same dataset to add missing entities to an existing project.</div>
       </label>
       <div id="uploadStatus" class="status-line"></div>
     </div>
@@ -230,6 +230,6 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<script src="app.js?v=20260920-entities"></script>
 </body>
 </html>

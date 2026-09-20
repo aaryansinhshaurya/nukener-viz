@@ -415,8 +415,12 @@ async function handleUpload(file) {
   form.append("file", file);
   try {
     const summary = await api(`/projects/${S.pid}/upload`, { method: "POST", body: form, isForm: true });
-    setUploadStatus(`✅ ${summary.documents_created} documents · ${summary.sentences_created} sentences · ${summary.entities_created} entities loaded`);
-    openProject(S.pid, S.pname);
+    const repaired = summary.documents_created === 0 && summary.sentences_created === 0;
+    setUploadStatus(repaired
+      ? `✅ ${summary.entities_created} missing entities added`
+      : `✅ ${summary.documents_created} documents · ${summary.sentences_created} sentences · ${summary.entities_created} entities loaded`);
+    await openProject(S.pid, S.pname);
+    if (repaired) alert(`${summary.entities_created} missing entities added to this project. Existing reviews were kept.`);
   } catch (e) { setUploadStatus(`❌ ${e.message}`, true); }
 }
 function setUploadStatus(msg, err=false) {
@@ -751,9 +755,6 @@ function getStyle(label) {
     }
     const s = matched ? ONTOLOGY[matched] : FALLBACK[_fi++ % FALLBACK.length];
     S.lStyle[label] = s;
-    const el = document.createElement("style");
-    el.textContent = `.entity[data-type="${CSS.escape(label)}"]{ background:${s.bg}; border-bottom-color:${s.bd}; }`;
-    document.head.appendChild(el);
   }
   return S.lStyle[label];
 }
@@ -774,7 +775,7 @@ function buildEntitySpan(ent) {
       <button class="ent-btn ent-btn-fp ${verdict==='fp'?'ent-active-fp':''}" ${dis||!editable?"disabled":""} onclick="setVerdict('${eidJs}','FP',event)">FP</button>
     </span>`;
 
-  return `<span class="ent-wrap ${isOpen?"open":""}"><span class="entity verdict-${verdict}" data-type="${escA(ent.label)}" data-eid="${escA(ent.id)}" onclick="toggleEntityBar('${eidJs}',event)">${esc(ent.text)}</span>${bar}</span>`;
+  return `<span class="ent-wrap ${isOpen?"open":""}"><span class="entity verdict-${verdict}" style="background:${s.bg};border-bottom-color:${s.bd}" data-type="${escA(ent.label)}" data-eid="${escA(ent.id)}" onclick="toggleEntityBar('${eidJs}',event)">${esc(ent.text)}</span>${bar}</span>`;
 }
 
 function toggleEntityBar(id, ev) {
@@ -842,7 +843,7 @@ function toggleLabel(t) { S.activeLabels.has(t) ? S.activeLabels.delete(t) : S.a
 function selectAllLabels() { S.activeLabels = new Set(S.labels); applyVisibility(); }
 function deselectAllLabels() { S.activeLabels.clear(); applyVisibility(); }
 function applyVisibility() {
-  document.querySelectorAll(".entity").forEach(el => { el.style.display = S.activeLabels.has(el.dataset.type) ? "" : "none"; });
+  document.querySelectorAll(".entity").forEach(el => { el.classList.toggle("entity-hidden", !S.activeLabels.has(el.dataset.type)); });
   document.querySelectorAll(".legend-tag").forEach(el => { el.classList.toggle("inactive", !S.activeLabels.has(el.dataset.type)); });
 }
 

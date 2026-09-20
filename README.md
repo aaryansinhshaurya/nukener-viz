@@ -27,9 +27,19 @@ Run the frontend using any static file server. The default API URL in `frontend/
 
 ## Email and accounts
 
-Set FRONTEND_URL to the Vercel origin so invitation and reset links open the correct site. On Render Free, add RESEND_API_KEY and EMAIL_FROM under the backend service's Environment settings. EMAIL_FROM must use a sender accepted by your email provider, usually on a verified domain. The backend sends through Resend's HTTPS API because Render Free blocks outbound SMTP ports 25, 465, and 587. Save the variables and redeploy. Keep API keys out of GitHub and frontend settings.
+Set `FRONTEND_URL` to the Vercel origin so invitation and reset links open the correct site. **Render Free blocks SMTP ports 25, 465, and 587**, so Gmail SMTP cannot send from a Free backend. This project supports Resend's HTTPS API instead:
+
+1. In [Resend](https://resend.com/docs/dashboard/domains/introduction), add a domain you control and complete its DNS verification. Create an API key.
+2. In the Render **backend service → Environment**, set `RESEND_API_KEY` to that key, `EMAIL_FROM` to a sender on the verified domain (for example, `NukeNER Review <review@your-domain.example>`), and `FRONTEND_URL` to your exact Vercel origin. Keep the key on the backend only.
+3. Save the environment and deploy the current backend code. Test **Forgot password** with an existing account. In a project's **Team** tab, use **Resend** for invitations that were saved while email was unavailable.
+
+Resend's test sender is limited; use a verified domain to send invitations to other people. An alternative is a paid Render service with SMTP enabled and a Gmail app password, which requires Google 2-Step Verification. Do not use your normal Gmail password as `SMTP_PASSWORD`.
 
 SMTP remains supported on hosts that allow it: set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, and SMTP_TLS. Invitations and password resets use the configured provider. If delivery is unavailable, the reset endpoint returns 503 and the button remains available for a retry. Existing pending invitations can be resent after the provider is configured. Password reset links expire after one hour and are single-use.
+
+## Repairing entities in an existing project
+
+If a dataset was uploaded before text-only entities were supported, select that project in **Projects** and upload the original CSV or JSON again. The backend checks that the document IDs, sentence IDs, and sentence text match the stored dataset, then adds only missing predictions. It keeps existing reviews and does not duplicate entities on a repeat upload. A different dataset is rejected; create a new project for different text. After repairing, save a new version if you use checkpoints, since earlier versions may predate the added entities.
 
 Roles belong to projects, not accounts. Creating a project makes the creator an owner. Owners can invite owners, reviewers, or viewers. Owners manage invitations, members, and deletion; owners and reviewers may review and save versions; viewers may inspect and export.
 
