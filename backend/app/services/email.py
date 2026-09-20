@@ -10,8 +10,16 @@ class EmailDeliveryError(Exception):
     pass
 
 
+def email_is_configured() -> bool:
+    return bool(
+        settings.SMTP_HOST
+        and settings.SMTP_FROM
+        and bool(settings.SMTP_USER) == bool(settings.SMTP_PASSWORD)
+    )
+
+
 def send_email(to_address: str, subject: str, body: str) -> None:
-    if not settings.SMTP_HOST or not settings.SMTP_FROM:
+    if not email_is_configured():
         raise EmailDeliveryError("Email delivery is not configured")
 
     message = EmailMessage()

@@ -9,7 +9,7 @@ from app.schemas.user import UserCreate, UserOut
 from app.schemas.auth import LoginRequest, TokenResponse, RefreshRequest, ForgotPasswordRequest, ResetPasswordRequest
 from app.models.token import PasswordReset
 from app.services.tokens import new_token, token_digest
-from app.services.email import send_email, EmailDeliveryError
+from app.services.email import send_email, email_is_configured, EmailDeliveryError
 from app.config import settings
 from app.auth.security import hash_password, verify_password
 from app.auth.jwt_handler import create_access_token, create_refresh_token, decode_token
@@ -81,7 +81,11 @@ def me(current_user: User = Depends(get_current_user)):
 
 @router.post("/forgot-password")
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
-    """Always return the same response so account existence is not exposed."""
+    """Keep the response independent of account existence when email is available."""
+    if not email_is_configured():
+        logger.error("Password reset email delivery is not configured")
+        raise HTTPException(status_code=503, detail="Password reset email is unavailable. Please try again later.")
+
     message = {"message": "If this email has an account, a reset link has been sent."}
     user = db.query(User).filter(User.email == payload.email.lower()).first()
     if user is None:
@@ -90,15 +94,18 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     recent = db.query(PasswordReset).filter(
         PasswordReset.user_id == user.id,
         PasswordReset.created_at > datetime.now(timezone.utc) - timedelta(minutes=2),
+        PasswordReset.used_at.is_(None),
+        PasswordReset.expires_at > datetime.now(timezone.utc),
     ).first()
     if recent:
         return message
 
     raw, digest = new_token()
-    db.add(PasswordReset(
+    reset = PasswordReset(
         user_id=user.id, token_hash=digest,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
-    ))
+    )
+    db.add(reset)
     db.commit()
     try:
         send_email(user.email, "Reset your NukeNER Review password",
@@ -107,6 +114,9 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
                    "If you did not request this, you can ignore this email.")
     except EmailDeliveryError:
         logger.exception("Password reset email delivery failed")
+        db.delete(reset)
+        db.commit()
+        raise HTTPException(status_code=503, detail="Password reset email is unavailable. Please try again later.")
     return message
 
 

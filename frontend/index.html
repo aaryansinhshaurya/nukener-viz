@@ -69,9 +69,9 @@
 
         <form id="authFormForgot" style="display:none" onsubmit="event.preventDefault(); requestPasswordReset()">
           <label class="field-label" for="forgotEmail">Email</label>
-          <input class="field" id="forgotEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
+          <input class="field" id="forgotEmail" type="email" placeholder="you@example.com" autocomplete="email" oninput="resetPasswordRequestState()" required>
           <div class="status-line" id="forgotStatus" role="status"></div>
-          <button class="btn btn-primary auth-submit" type="submit">Send reset link <span aria-hidden="true">→</span></button>
+          <button class="btn btn-primary auth-submit" id="forgotSubmit" type="submit">Send reset link <span aria-hidden="true">→</span></button>
           <button class="link-btn auth-back" type="button" onclick="switchAuthTab('login')">Back to login</button>
         </form>
 

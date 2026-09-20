@@ -29,6 +29,8 @@ Run the frontend using any static file server. The default API URL in `frontend/
 
 Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TLS`, and `FRONTEND_URL` on Render. Invitations and password resets send through that provider. An owner can invite an email that has not signed up yet. The invitee signs up or signs in with the same address, then accepts the seven-day link. Password reset links expire after one hour and can be used once. A password change invalidates existing access and refresh tokens.
 
+In the Render backend service's **Environment** settings, enter the SMTP host, port, login, and password supplied by your email provider. Use a sender address verified with that provider for `SMTP_FROM`. Port 587 uses STARTTLS when `SMTP_TLS=true`; port 465 uses SSL. Set `FRONTEND_URL` to the deployed frontend origin, such as `https://your-project.vercel.app`, without a trailing path. Save the environment and redeploy the backend. If SMTP is missing or delivery fails, the password-reset API returns 503 so the page can show an error and allow another attempt. The API keeps a generic success message for unknown email addresses.
+
 Roles belong to projects, not accounts. Creating a project makes the creator an owner. Owners can invite owners, reviewers, or viewers. Owners manage invitations, members, and deletion; owners and reviewers may review and save versions; viewers may inspect and export.
 
 ## Versions and deletion

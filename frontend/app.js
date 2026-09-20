@@ -206,10 +206,28 @@ function switchAuthTab(tab) {
 
 async function requestPasswordReset() {
   const el = _qs("forgotStatus");
+  const button = _qs("forgotSubmit");
+  const email = _qs("forgotEmail");
+  button.disabled = true;
+  email.disabled = true;
+  button.textContent = "Sending...";
+  el.textContent = "";
   try {
-    const result = await api("/auth/forgot-password", {method:"POST", body:{email:_qs("forgotEmail").value.trim()}, auth:false});
+    const result = await api("/auth/forgot-password", {method:"POST", body:{email:email.value.trim()}, auth:false});
     el.textContent = result.message;
-  } catch (e) { el.textContent = e.message; }
+    button.textContent = "Password Reset Link Sent";
+  } catch (e) {
+    el.textContent = e.message;
+    button.textContent = "Send reset link";
+    button.disabled = false;
+  } finally { email.disabled = false; }
+}
+
+function resetPasswordRequestState() {
+  const button = _qs("forgotSubmit");
+  button.textContent = "Send reset link";
+  button.disabled = false;
+  _qs("forgotStatus").textContent = "";
 }
 
 async function submitPasswordReset() {
