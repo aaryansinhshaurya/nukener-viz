@@ -14,20 +14,40 @@ class EmailDeliveryError(Exception):
 
 def email_is_configured() -> bool:
     sender = settings.EMAIL_FROM or settings.SMTP_FROM
-    return bool(
-        sender and (
-            settings.RESEND_API_KEY
-            or (
-                settings.SMTP_HOST
-                and bool(settings.SMTP_USER) == bool(settings.SMTP_PASSWORD)
-            )
-        )
+    apps_script = settings.APPS_SCRIPT_MAIL_URL and settings.APPS_SCRIPT_MAIL_SECRET
+    provider = sender and (
+        settings.RESEND_API_KEY
+        or (settings.SMTP_HOST and bool(settings.SMTP_USER) == bool(settings.SMTP_PASSWORD))
     )
+    return bool(apps_script or provider)
 
 
 def send_email(to_address: str, subject: str, body: str) -> None:
     if not email_is_configured():
         raise EmailDeliveryError("Email delivery is not configured")
+
+    if settings.APPS_SCRIPT_MAIL_URL and settings.APPS_SCRIPT_MAIL_SECRET:
+        payload = json.dumps({
+            "secret": settings.APPS_SCRIPT_MAIL_SECRET,
+            "to": to_address,
+            "subject": subject,
+            "body": body,
+        }).encode("utf-8")
+        email_request = request.Request(
+            settings.APPS_SCRIPT_MAIL_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(email_request, timeout=20) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except (error.HTTPError, error.URLError, TimeoutError, OSError,
+                UnicodeError, json.JSONDecodeError) as exc:
+            raise EmailDeliveryError("Apps Script email delivery failed") from exc
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            raise EmailDeliveryError("Apps Script rejected the message")
+        return
 
     sender = settings.EMAIL_FROM or settings.SMTP_FROM
     if settings.RESEND_API_KEY:

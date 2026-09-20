@@ -9,7 +9,7 @@ A collaborative application for checking named entity predictions. Reviewers mar
 
 ## Input
 
-Upload CSV or JSON rows with document_id, filename, source, cleaned_title, sentence_id, sentence, entities. The three metadata fields may be blank or omitted in JSON. Source, when present, appears quietly beside the document ID. Each entity needs text and label. start_char and end_char are optional: the importer locates text in the sentence, using the next unused occurrence when text repeats. Explicit offsets are zero-based and end_char is exclusive. An entity whose text cannot be found causes a clear import error. Metadata must be consistent for every row of a document.
+Upload CSV or JSON rows with document_id, filename, source, cleaned_title, sentence_id, sentence, entities. The three metadata fields may be blank or omitted in JSON. Source, when present, appears quietly beside the document ID. Each entity needs text and label. start_char and end_char are optional: the importer locates text in the sentence, using the next unused occurrence when text repeats. Explicit offsets are zero-based and end_char is exclusive. An entity whose text cannot be found in its sentence is skipped and reported in the upload summary; valid entities still import. Explicit offsets that point to different text remain an error. Metadata must be consistent for every row of a document.
 
 ## Local backend
 
@@ -27,10 +27,12 @@ Run the frontend using any static file server. The default API URL in `frontend/
 
 ## Email and accounts
 
-Set `FRONTEND_URL` to the Vercel origin so invitation and reset links open the correct site. **Render Free blocks SMTP ports 25, 465, and 587**, so Gmail SMTP cannot send from a Free backend. This project supports Resend's HTTPS API instead:
+Set `FRONTEND_URL` to the Vercel origin so invitation and reset links open the correct site. **Render Free blocks SMTP ports 25, 465, and 587**, so Gmail SMTP cannot send from a Free backend. For a small private project, deploy a Google Apps Script web app that uses `MailApp.sendEmail`. In Render **backend service → Environment**, set `APPS_SCRIPT_MAIL_URL` to its `/exec` web app URL and `APPS_SCRIPT_MAIL_SECRET` to the same `MAIL_SECRET` stored in Apps Script project settings. Both are required. The script must accept a JSON POST with `secret`, `to`, `subject`, and `body`, and return JSON `{"ok": true}` only after sending. Keep the secret out of GitHub and the frontend. Deployment ID and Script ID are not needed by the backend. Apps Script takes priority over the providers below. After the backend redeploys, test a password reset for an existing account and resend any pending project invitations.
 
-1. In [Resend](https://resend.com/docs/dashboard/domains/introduction), add a domain you control and complete its DNS verification. Create an API key.
-2. In the Render **backend service → Environment**, set `RESEND_API_KEY` to that key, `EMAIL_FROM` to a sender on the verified domain (for example, `NukeNER Review <review@your-domain.example>`), and `FRONTEND_URL` to your exact Vercel origin. Keep the key on the backend only.
+Alternatively, this project supports Resend's HTTPS API:
+
+1. In [Resend](https://resend.com/docs/dashboard/domains/introduction), add a domain you control and complete its DNS verification. Create an API key in Resend's **API Keys** page; its value starts with `re_`.
+2. In the Render **backend service → Environment**, replace the placeholder `value`: set `RESEND_API_KEY` to that generated key, `EMAIL_FROM` to a sender on the verified domain (for example, `NukeNER Review <review@your-domain.example>`), and `FRONTEND_URL` to your exact Vercel origin. Keep the key on the backend only.
 3. Save the environment and deploy the current backend code. Test **Forgot password** with an existing account. In a project's **Team** tab, use **Resend** for invitations that were saved while email was unavailable.
 
 Resend's test sender is limited; use a verified domain to send invitations to other people. An alternative is a paid Render service with SMTP enabled and a Gmail app password, which requires Google 2-Step Verification. Do not use your normal Gmail password as `SMTP_PASSWORD`.

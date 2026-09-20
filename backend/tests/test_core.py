@@ -38,11 +38,36 @@ class IngestionTests(unittest.TestCase):
         self.assertEqual(skipped, 0)
         self.assertEqual([entity.start_char for entity in rows[0].entities], [0, 10])
 
-    def test_unmatched_text_reports_import_error(self):
+    def test_unmatched_text_is_skipped_without_losing_valid_entities(self):
         data = [{"document_id": "D1", "sentence_id": "S1", "sentence": "Alpha beta",
-                 "entities": [{"text": "Gamma", "label": "ORG"}]}]
+                 "entities": [{"text": "SPARC", "label": "DEVICE"}, {"text": "Alpha", "label": "ORG"}]}]
+        details = []
+        rows, skipped = parse_json(json.dumps(data).encode(), details)
+        validate_offsets_against_text(rows)
+        self.assertEqual(skipped, 1)
+        self.assertIn("SPARC", details[0])
+        self.assertEqual([entity.text for entity in rows[0].entities], ["Alpha"])
+
+    def test_csv_unmatched_text_skips_only_the_invalid_prediction(self):
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["document_id", "sentence_id", "sentence", "entities"])
+        writer.writerow(["D1", "S1", "Alpha beta", json.dumps([
+            {"text": "SPARC", "label": "DEVICE"}, {"text": "beta", "label": "ORG"},
+        ])])
+        details = []
+        rows, skipped = parse_csv(output.getvalue().encode(), details)
+        validate_offsets_against_text(rows)
+        self.assertEqual(skipped, 1)
+        self.assertIn("Row 2", details[0])
+        self.assertEqual([entity.text for entity in rows[0].entities], ["beta"])
+
+    def test_invalid_explicit_offsets_still_fail_import(self):
+        data = [{"document_id": "D1", "sentence_id": "S1", "sentence": "Alpha beta",
+                 "entities": [{"text": "Gamma", "label": "ORG", "start_char": 0, "end_char": 5}]}]
+        rows, _ = parse_json(json.dumps(data).encode())
         with self.assertRaises(IngestionError):
-            parse_json(json.dumps(data).encode())
+            validate_offsets_against_text(rows)
 
     def test_new_columns_accept_blank_optional_metadata(self):
         csv_data = (

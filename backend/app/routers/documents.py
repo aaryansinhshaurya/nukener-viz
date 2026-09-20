@@ -30,12 +30,13 @@ def upload_dataset(
     if len(raw) > settings.MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
     filename = (file.filename or "").lower()
+    skipped_details: list[str] = []
 
     try:
         if filename.endswith(".json"):
-            sentences, skipped_entities = parse_json(raw)
+            sentences, skipped_entities = parse_json(raw, skipped_details)
         elif filename.endswith(".csv"):
-            sentences, skipped_entities = parse_csv(raw)
+            sentences, skipped_entities = parse_csv(raw, skipped_details)
         else:
             raise IngestionError(["Unsupported file type — upload a .csv or .json file"])
 
@@ -50,7 +51,13 @@ def upload_dataset(
         .all()
     )
     if existing_documents:
-        return _add_missing_entities(db, existing_documents, sentences)
+        return _add_missing_entities(db, existing_documents, sentences, skipped_entities, skipped_details)
+
+    if skipped_entities and not any(sentence.entities for sentence in sentences):
+        raise HTTPException(
+            status_code=422,
+            detail={"errors": ["No entity text matched any uploaded sentence.", *skipped_details[:10]]},
+        )
 
     doc_map: dict[str, Document] = {}
     sentences_created = 0
@@ -93,10 +100,14 @@ def upload_dataset(
         sentences_created=sentences_created,
         entities_created=entities_created,
         entities_skipped_missing_offsets=skipped_entities,
+        skipped_entity_details=skipped_details[:50],
     )
 
 
-def _add_missing_entities(db: Session, documents: list[Document], sentences: list[SentenceIn]) -> UploadSummary:
+def _add_missing_entities(
+    db: Session, documents: list[Document], sentences: list[SentenceIn],
+    skipped_entities: int = 0, skipped_details: list[str] | None = None,
+) -> UploadSummary:
     """Repair an old import while preserving its reviews and document IDs."""
     existing = {
         (document.doc_id_external, sentence.sentence_id_external): sentence
@@ -135,7 +146,11 @@ def _add_missing_entities(db: Session, documents: list[Document], sentences: lis
             known.add(key)
             added += 1
     db.commit()
-    return UploadSummary(documents_created=0, sentences_created=0, entities_created=added)
+    return UploadSummary(
+        documents_created=0, sentences_created=0, entities_created=added,
+        entities_skipped_missing_offsets=skipped_entities,
+        skipped_entity_details=(skipped_details or [])[:50],
+    )
 
 
 @router.get("/documents", response_model=list[DocumentSummaryOut])

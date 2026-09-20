@@ -43,7 +43,9 @@ def _parse_entities_field(raw: str, row_label: str) -> list[dict]:
         raise ValueError(f"{row_label}: could not parse entities field ({exc})")
 
 
-def _prepare_entities(raw_entities: list[dict], sentence: str) -> list[EntityIn]:
+def _prepare_entities(
+    raw_entities: list[dict], sentence: str, skipped_details: list[str], row_label: str,
+) -> list[EntityIn]:
     """Locate text-only predictions, keeping explicit offsets when provided."""
     if not isinstance(raw_entities, list):
         raise ValueError("entities must be a list")
@@ -79,7 +81,8 @@ def _prepare_entities(raw_entities: list[dict], sentence: str) -> list[EntityIn]
                 if span is not None:
                     break
             if span is None:
-                raise ValueError(f"entity '{text}' was not found in the sentence; provide valid offsets")
+                skipped_details.append(f"{row_label}: entity '{text}' was not found in the sentence")
+                continue
 
             start, end = span
             entity = {**entity, "text": sentence[start:end], "start_char": start, "end_char": end}
@@ -89,7 +92,7 @@ def _prepare_entities(raw_entities: list[dict], sentence: str) -> list[EntityIn]
     return prepared
 
 
-def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
+def parse_csv(file_bytes: bytes, skipped_details: list[str] | None = None) -> tuple[List[SentenceIn], int]:
 
     text = file_bytes.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
@@ -110,6 +113,7 @@ def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
 
     sentences: list[SentenceIn] = []
     errors: list[str] = []
+    skipped = skipped_details if skipped_details is not None else []
 
     for i, row in enumerate(reader, start=2):
 
@@ -122,7 +126,7 @@ def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
                 row_label,
             )
 
-            entities = _prepare_entities(entities_raw, row["sentence"])
+            entities = _prepare_entities(entities_raw, row["sentence"], skipped, row_label)
 
             sentence = SentenceIn(
                 document_id=row["document_id"].strip(),
@@ -142,10 +146,10 @@ def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
     if errors:
         raise IngestionError(errors)
 
-    return sentences, 0
+    return sentences, len(skipped)
 
 
-def parse_json(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
+def parse_json(file_bytes: bytes, skipped_details: list[str] | None = None) -> tuple[List[SentenceIn], int]:
 
     try:
         data = json.loads(file_bytes.decode("utf-8-sig"))
@@ -159,6 +163,7 @@ def parse_json(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
 
     sentences: list[SentenceIn] = []
     errors: list[str] = []
+    skipped = skipped_details if skipped_details is not None else []
 
     for i, item in enumerate(data, start=1):
 
@@ -169,7 +174,7 @@ def parse_json(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
         try:
             if not isinstance(item, dict):
                 raise ValueError("each item must be an object")
-            entities = _prepare_entities(item.get("entities", []), item["sentence"])
+            entities = _prepare_entities(item.get("entities", []), item["sentence"], skipped, row_label)
             sentences.append(SentenceIn(**{**item, "entities": entities}))
 
         except Exception as exc:
@@ -178,7 +183,7 @@ def parse_json(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
     if errors:
         raise IngestionError(errors)
 
-    return sentences, 0
+    return sentences, len(skipped)
 
 
 def validate_offsets_against_text(sentences: List[SentenceIn]) -> None:

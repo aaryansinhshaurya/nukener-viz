@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from pydantic import BaseModel, ConfigDict, model_validator, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 from app.models.document import EntitySource
 from app.schemas.review import ReviewOut
 
@@ -41,6 +41,7 @@ class UploadSummary(BaseModel):
     sentences_created: int
     entities_created: int
     entities_skipped_missing_offsets: int = 0
+    skipped_entity_details: list[str] = Field(default_factory=list)
 
 
 class EntityOut(BaseModel):

@@ -2,7 +2,7 @@ import json
 import unittest
 import uuid
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from fastapi import HTTPException
 
@@ -14,6 +14,8 @@ from app.services.email import EmailDeliveryError, send_email
 class PasswordResetDeliveryTests(unittest.TestCase):
     def test_resend_uses_https_when_configured(self):
         with patch("app.services.email.settings") as settings, patch("app.services.email.request.urlopen") as urlopen:
+            settings.APPS_SCRIPT_MAIL_URL = ""
+            settings.APPS_SCRIPT_MAIL_SECRET = ""
             settings.RESEND_API_KEY = "test-key"
             settings.EMAIL_FROM = "NukeNER Review <review@example.com>"
             settings.SMTP_FROM = ""
@@ -28,6 +30,35 @@ class PasswordResetDeliveryTests(unittest.TestCase):
             "subject": "Reset your password",
             "text": "Reset link",
         })
+
+    def test_apps_script_sends_over_https_and_checks_success(self):
+        with patch("app.services.email.settings") as settings, patch("app.services.email.request.urlopen") as urlopen:
+            settings.APPS_SCRIPT_MAIL_URL = "https://script.google.com/macros/s/test/exec"
+            settings.APPS_SCRIPT_MAIL_SECRET = "private-test-secret"
+            settings.RESEND_API_KEY = ""
+            settings.EMAIL_FROM = ""
+            settings.SMTP_FROM = ""
+            urlopen.return_value.__enter__.return_value.read.return_value = b'{"ok": true}'
+
+            send_email("user@example.com", "Reset your password", "Reset link")
+
+        email_request = urlopen.call_args.args[0]
+        self.assertEqual(email_request.full_url, "https://script.google.com/macros/s/test/exec")
+        self.assertEqual(json.loads(email_request.data), {
+            "secret": "private-test-secret",
+            "to": "user@example.com",
+            "subject": "Reset your password",
+            "body": "Reset link",
+        })
+
+    def test_apps_script_rejection_does_not_report_success(self):
+        with patch("app.services.email.settings") as settings, patch("app.services.email.request.urlopen") as urlopen:
+            settings.APPS_SCRIPT_MAIL_URL = "https://script.google.com/macros/s/test/exec"
+            settings.APPS_SCRIPT_MAIL_SECRET = "private-test-secret"
+            urlopen.return_value.__enter__.return_value.read.return_value = b'{"ok": false, "error": "Unauthorized"}'
+
+            with self.assertRaises(EmailDeliveryError):
+                send_email("user@example.com", "Reset your password", "Reset link")
 
     def setUp(self):
         self.payload = ForgotPasswordRequest(email="user@example.com")

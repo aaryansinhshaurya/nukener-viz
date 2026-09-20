@@ -46,8 +46,13 @@ class DocumentRepairTests(unittest.TestCase):
         self.db = Mock()
 
     def test_reupload_adds_missing_entity_with_resolved_offsets(self):
-        summary = _add_missing_entities(self.db, [self.document], self.rows)
+        summary = _add_missing_entities(
+            self.db, [self.document], self.rows, 1,
+            ["Row 49 (sentence_id=D0006-S011): entity 'SPARC' was not found in the sentence"],
+        )
         self.assertEqual((summary.documents_created, summary.sentences_created, summary.entities_created), (0, 0, 1))
+        self.assertEqual(summary.entities_skipped_missing_offsets, 1)
+        self.assertIn("SPARC", summary.skipped_entity_details[0])
         entity = self.db.add.call_args.args[0]
         self.assertEqual(entity.sentence_id, self.stored_sentence.id)
         self.assertEqual(SENTENCE[entity.start_char:entity.end_char], ENTITY_TEXT)

@@ -191,7 +191,9 @@ function updateThemeButtons() {
 
 function openAuth(tab) {
   switchAuthTab(tab);
-  _qs("authPanel").scrollIntoView({ behavior: "smooth", block: "center" });
+  if (window.matchMedia("(max-width: 980px)").matches) {
+    _qs("authPanel").scrollIntoView({ behavior: "smooth", block: "center" });
+  }
   const firstField = {login:"loginEmail", signup:"signupName", forgot:"forgotEmail", reset:"resetPassword"}[tab];
   if (firstField) _qs(firstField).focus({preventScroll:true});
 }
@@ -416,11 +418,19 @@ async function handleUpload(file) {
   try {
     const summary = await api(`/projects/${S.pid}/upload`, { method: "POST", body: form, isForm: true });
     const repaired = summary.documents_created === 0 && summary.sentences_created === 0;
+    const skipped = summary.entities_skipped_missing_offsets || 0;
     setUploadStatus(repaired
-      ? `✅ ${summary.entities_created} missing entities added`
-      : `✅ ${summary.documents_created} documents · ${summary.sentences_created} sentences · ${summary.entities_created} entities loaded`);
+      ? `✅ ${summary.entities_created} missing entities added${skipped ? ` · ${skipped} unmatched predictions skipped` : ""}`
+      : `✅ ${summary.documents_created} documents · ${summary.sentences_created} sentences · ${summary.entities_created} entities loaded${skipped ? ` · ${skipped} unmatched predictions skipped` : ""}`);
     await openProject(S.pid, S.pname);
-    if (repaired) alert(`${summary.entities_created} missing entities added to this project. Existing reviews were kept.`);
+    const notices = [];
+    if (repaired) notices.push(`${summary.entities_created} missing entities added to this project. Existing reviews were kept.`);
+    if (skipped) {
+      notices.push(`${skipped} predictions were skipped because their text does not appear in the sentence. The other entities were imported.`);
+      notices.push(...(summary.skipped_entity_details || []).slice(0, 8));
+      if (skipped > 8) notices.push(`...and ${skipped - 8} more.`);
+    }
+    if (notices.length) alert(notices.join("\n"));
   } catch (e) { setUploadStatus(`❌ ${e.message}`, true); }
 }
 function setUploadStatus(msg, err=false) {
