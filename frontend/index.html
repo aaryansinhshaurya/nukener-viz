@@ -51,7 +51,7 @@
           <label class="field-label" for="loginEmail">Email</label>
           <input class="field" id="loginEmail" type="email" placeholder="you@example.com" autocomplete="username" required>
           <div class="auth-password-label"><label class="field-label" for="loginPassword">Password</label><button class="link-btn" type="button" onclick="switchAuthTab('forgot')">Forgot password?</button></div>
-          <input class="field" id="loginPassword" type="password" placeholder="Your password" autocomplete="current-password" required>
+          <div class="password-field"><input class="field" id="loginPassword" type="password" placeholder="Your password" autocomplete="current-password" required><button class="password-toggle" type="button" aria-label="Show password" aria-controls="loginPassword" aria-pressed="false" onclick="togglePasswordVisibility('loginPassword', this)">👁</button></div>
           <div class="error-text" id="loginError" role="alert"></div>
           <button class="btn btn-primary auth-submit" type="submit">Log in <span aria-hidden="true">→</span></button>
         </form>
@@ -62,7 +62,7 @@
           <label class="field-label" for="signupEmail">Email</label>
           <input class="field" id="signupEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
           <label class="field-label" for="signupPassword">Password</label>
-          <input class="field" id="signupPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" minlength="8" required>
+          <div class="password-field"><input class="field" id="signupPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" minlength="8" required><button class="password-toggle" type="button" aria-label="Show password" aria-controls="signupPassword" aria-pressed="false" onclick="togglePasswordVisibility('signupPassword', this)">👁</button></div>
           <div class="error-text" id="signupError" role="alert"></div>
           <button class="btn btn-primary auth-submit" type="submit">Create account <span aria-hidden="true">→</span></button>
         </form>
@@ -111,7 +111,7 @@
         <input type="file" id="uploadFileInput" accept=".csv,.json" style="display:none">
         <div class="upload-icon">📂</div>
         <div class="upload-label">Click to upload or drag &amp; drop</div>
-        <div class="upload-sub">CSV or JSON — document_id, filename, source, cleaned_title, sentence_id, sentence, entities</div>
+        <div class="upload-sub">CSV or JSON — document_id, filename, source, cleaned_title, sentence_id, sentence, entities. Entity offsets are optional when text matches the sentence.</div>
       </label>
       <div id="uploadStatus" class="status-line"></div>
     </div>
@@ -214,8 +214,8 @@
             <h2>Open a project to begin</h2>
             <p>Create or open a project using the <strong>⊕ Projects</strong> button above.</p>
             <div class="format-hint">
-              <div class="hint-block"><strong>CSV columns</strong><br>document_id, filename, source, cleaned_title, sentence_id, sentence, entities<br><code>entities: [{"text":"...","label":"...","start_char":0,"end_char":3}]</code></div>
-              <div class="hint-block">Offsets are the source of truth; casing differences in <code>text</code> are normalized on upload when they match the span.</div>
+              <div class="hint-block"><strong>CSV columns</strong><br>document_id, filename, source, cleaned_title, sentence_id, sentence, entities<br><code>entities: [{"text":"...","label":"..."}]</code><br>Character offsets are optional when the text appears in the sentence.</div>
+              <div class="hint-block">If you provide offsets, the importer checks them against the sentence. Without offsets, it finds the entity text for you.</div>
               <div class="hint-block"><strong>JSON</strong><br>a list of objects with the same fields, one per sentence. Filename, source, and title may be blank.</div>
             </div>
           </div>

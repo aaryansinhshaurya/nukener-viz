@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import unittest
 import uuid
@@ -12,6 +14,36 @@ from app.services.versioning import compare_snapshots, snapshot_hash
 
 
 class IngestionTests(unittest.TestCase):
+    def test_text_only_csv_entity_gets_offsets(self):
+        sentence = "Energy Project Permitting The U.S. Department of the Interior recently announced a change."
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["document_id", "filename", "source", "cleaned_title", "sentence_id", "sentence", "entities"])
+        writer.writerow(["D0002", "", "The Fusion Report", "Energy Policy Outlook", "D0002-S020", sentence,
+                         json.dumps([{"text": "U.S. Department of the Interior",
+                                      "label": "Organization and Company [Government / Policy / Funding / Regulatory Agency]"}])])
+
+        rows, skipped = parse_csv(output.getvalue().encode())
+        validate_offsets_against_text(rows)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(len(rows[0].entities), 1)
+        entity = rows[0].entities[0]
+        self.assertEqual(sentence[entity.start_char:entity.end_char], entity.text)
+
+    def test_repeated_text_uses_distinct_spans(self):
+        data = [{"document_id": "D1", "sentence_id": "S1", "sentence": "Alpha and Alpha",
+                 "entities": [{"text": "Alpha", "label": "ORG"}, {"text": "Alpha", "label": "ORG"}]}]
+        rows, skipped = parse_json(json.dumps(data).encode())
+        validate_offsets_against_text(rows)
+        self.assertEqual(skipped, 0)
+        self.assertEqual([entity.start_char for entity in rows[0].entities], [0, 10])
+
+    def test_unmatched_text_reports_import_error(self):
+        data = [{"document_id": "D1", "sentence_id": "S1", "sentence": "Alpha beta",
+                 "entities": [{"text": "Gamma", "label": "ORG"}]}]
+        with self.assertRaises(IngestionError):
+            parse_json(json.dumps(data).encode())
+
     def test_new_columns_accept_blank_optional_metadata(self):
         csv_data = (
             'document_id,filename,source,cleaned_title,sentence_id,sentence,entities\n'

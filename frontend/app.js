@@ -54,6 +54,15 @@ const pct  = v => (v != null ? (v*100).toFixed(1)+"%" : "—");
 const wsUrl = () => API_BASE_URL.replace(/^http/, "ws");
 function _qs(id) { return document.getElementById(id); }
 
+function togglePasswordVisibility(inputId, button) {
+  const input = _qs(inputId);
+  const visible = input.type === "password";
+  input.type = visible ? "text" : "password";
+  button.setAttribute("aria-label", visible ? "Hide password" : "Show password");
+  button.setAttribute("aria-pressed", String(visible));
+  input.focus({preventScroll:true});
+}
+
 /* ══════════════════════════════════════════════════════════
    API layer — fetch wrapper with JWT + one-shot refresh retry
    ══════════════════════════════════════════════════════════ */

@@ -1,3 +1,4 @@
+import json
 import unittest
 import uuid
 from types import SimpleNamespace
@@ -7,10 +8,27 @@ from fastapi import HTTPException
 
 from app.routers.auth import forgot_password
 from app.schemas.auth import ForgotPasswordRequest
-from app.services.email import EmailDeliveryError
+from app.services.email import EmailDeliveryError, send_email
 
 
 class PasswordResetDeliveryTests(unittest.TestCase):
+    def test_resend_uses_https_when_configured(self):
+        with patch("app.services.email.settings") as settings, patch("app.services.email.request.urlopen") as urlopen:
+            settings.RESEND_API_KEY = "test-key"
+            settings.EMAIL_FROM = "NukeNER Review <review@example.com>"
+            settings.SMTP_FROM = ""
+            send_email("user@example.com", "Reset your password", "Reset link")
+
+        email_request = urlopen.call_args.args[0]
+        self.assertEqual(email_request.full_url, "https://api.resend.com/emails")
+        self.assertEqual(email_request.get_header("Authorization"), "Bearer test-key")
+        self.assertEqual(json.loads(email_request.data), {
+            "from": "NukeNER Review <review@example.com>",
+            "to": ["user@example.com"],
+            "subject": "Reset your password",
+            "text": "Reset link",
+        })
+
     def setUp(self):
         self.payload = ForgotPasswordRequest(email="user@example.com")
         self.db = Mock()

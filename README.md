@@ -9,7 +9,7 @@ A collaborative application for checking named entity predictions. Reviewers mar
 
 ## Input
 
-Upload CSV or JSON rows with `document_id, filename, source, cleaned_title, sentence_id, sentence, entities`. The three document metadata fields may be blank or omitted in JSON. `source`, when present, appears quietly beside the document ID. `entities` is a list of objects with `text`, `label`, `start_char`, and `end_char`; offsets are zero-based and `end_char` is exclusive. Metadata must be consistent for every row of a document.
+Upload CSV or JSON rows with document_id, filename, source, cleaned_title, sentence_id, sentence, entities. The three metadata fields may be blank or omitted in JSON. Source, when present, appears quietly beside the document ID. Each entity needs text and label. start_char and end_char are optional: the importer locates text in the sentence, using the next unused occurrence when text repeats. Explicit offsets are zero-based and end_char is exclusive. An entity whose text cannot be found causes a clear import error. Metadata must be consistent for every row of a document.
 
 ## Local backend
 
@@ -27,9 +27,9 @@ Run the frontend using any static file server. The default API URL in `frontend/
 
 ## Email and accounts
 
-Set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TLS`, and `FRONTEND_URL` on Render. Invitations and password resets send through that provider. An owner can invite an email that has not signed up yet. The invitee signs up or signs in with the same address, then accepts the seven-day link. Password reset links expire after one hour and can be used once. A password change invalidates existing access and refresh tokens.
+Set FRONTEND_URL to the Vercel origin so invitation and reset links open the correct site. On Render Free, add RESEND_API_KEY and EMAIL_FROM under the backend service's Environment settings. EMAIL_FROM must use a sender accepted by your email provider, usually on a verified domain. The backend sends through Resend's HTTPS API because Render Free blocks outbound SMTP ports 25, 465, and 587. Save the variables and redeploy. Keep API keys out of GitHub and frontend settings.
 
-In the Render backend service's **Environment** settings, enter the SMTP host, port, login, and password supplied by your email provider. Use a sender address verified with that provider for `SMTP_FROM`. Port 587 uses STARTTLS when `SMTP_TLS=true`; port 465 uses SSL. Set `FRONTEND_URL` to the deployed frontend origin, such as `https://your-project.vercel.app`, without a trailing path. Save the environment and redeploy the backend. If SMTP is missing or delivery fails, the password-reset API returns 503 so the page can show an error and allow another attempt. The API keeps a generic success message for unknown email addresses.
+SMTP remains supported on hosts that allow it: set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, and SMTP_TLS. Invitations and password resets use the configured provider. If delivery is unavailable, the reset endpoint returns 503 and the button remains available for a retry. Existing pending invitations can be resent after the provider is configured. Password reset links expire after one hour and are single-use.
 
 Roles belong to projects, not accounts. Creating a project makes the creator an owner. Owners can invite owners, reviewers, or viewers. Owners manage invitations, members, and deletion; owners and reviewers may review and save versions; viewers may inspect and export.
 

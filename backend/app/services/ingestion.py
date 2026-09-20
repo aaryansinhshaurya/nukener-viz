@@ -2,6 +2,7 @@ import ast
 import csv
 import io
 import json
+import re
 from typing import List
 
 from app.schemas.document import SentenceIn, EntityIn
@@ -42,6 +43,52 @@ def _parse_entities_field(raw: str, row_label: str) -> list[dict]:
         raise ValueError(f"{row_label}: could not parse entities field ({exc})")
 
 
+def _prepare_entities(raw_entities: list[dict], sentence: str) -> list[EntityIn]:
+    """Locate text-only predictions, keeping explicit offsets when provided."""
+    if not isinstance(raw_entities, list):
+        raise ValueError("entities must be a list")
+
+    used_spans: list[tuple[int, int]] = []
+    for entity in raw_entities:
+        if not isinstance(entity, dict):
+            raise ValueError("each entity must be an object")
+        if entity.get("start_char") not in (None, "", "null") and entity.get("end_char") not in (None, "", "null"):
+            used_spans.append((int(entity["start_char"]), int(entity["end_char"])))
+
+    prepared: list[EntityIn] = []
+    for entity in raw_entities:
+        start = entity.get("start_char")
+        end = entity.get("end_char")
+        missing_start = start in (None, "", "null")
+        missing_end = end in (None, "", "null")
+        if missing_start != missing_end:
+            raise ValueError(f"entity '{entity.get('text', '')}' has only one character offset")
+
+        if missing_start:
+            text = entity.get("text")
+            if not isinstance(text, str) or not text:
+                raise ValueError("entities without offsets need nonempty text")
+
+            span = None
+            for flags in (0, re.IGNORECASE):
+                for match in re.finditer(re.escape(text), sentence, flags):
+                    candidate = match.span()
+                    if all(candidate[1] <= used[0] or candidate[0] >= used[1] for used in used_spans):
+                        span = candidate
+                        break
+                if span is not None:
+                    break
+            if span is None:
+                raise ValueError(f"entity '{text}' was not found in the sentence; provide valid offsets")
+
+            start, end = span
+            entity = {**entity, "text": sentence[start:end], "start_char": start, "end_char": end}
+            used_spans.append(span)
+
+        prepared.append(EntityIn(**entity))
+    return prepared
+
+
 def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
 
     text = file_bytes.decode("utf-8-sig")
@@ -64,8 +111,6 @@ def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
     sentences: list[SentenceIn] = []
     errors: list[str] = []
 
-    skipped_entities = 0
-
     for i, row in enumerate(reader, start=2):
 
         row_label = f"Row {i} (sentence_id={row.get('sentence_id')})"
@@ -77,21 +122,7 @@ def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
                 row_label,
             )
 
-            entities: list[EntityIn] = []
-
-            for e in entities_raw:
-
-                start = e.get("start_char")
-                end = e.get("end_char")
-
-                # Ignore entities with missing offsets — but the caller
-                # gets the count back and must surface it, rather than
-                # this silently vanishing into a server-side print().
-                if start in (None, "", "null") or end in (None, "", "null"):
-                    skipped_entities += 1
-                    continue
-
-                entities.append(EntityIn(**e))
+            entities = _prepare_entities(entities_raw, row["sentence"])
 
             sentence = SentenceIn(
                 document_id=row["document_id"].strip(),
@@ -111,7 +142,7 @@ def parse_csv(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
     if errors:
         raise IngestionError(errors)
 
-    return sentences, skipped_entities
+    return sentences, 0
 
 
 def parse_json(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
@@ -129,8 +160,6 @@ def parse_json(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
     sentences: list[SentenceIn] = []
     errors: list[str] = []
 
-    skipped_entities = 0
-
     for i, item in enumerate(data, start=1):
 
         sid = item.get("sentence_id") if isinstance(item, dict) else "?"
@@ -138,23 +167,10 @@ def parse_json(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
         row_label = f"Item {i} (sentence_id={sid})"
 
         try:
-
-            cleaned_entities = []
-
-            for e in item.get("entities", []):
-
-                start = e.get("start_char")
-                end = e.get("end_char")
-
-                if start in (None, "", "null") or end in (None, "", "null"):
-                    skipped_entities += 1
-                    continue
-
-                cleaned_entities.append(e)
-
-            item["entities"] = cleaned_entities
-
-            sentences.append(SentenceIn(**item))
+            if not isinstance(item, dict):
+                raise ValueError("each item must be an object")
+            entities = _prepare_entities(item.get("entities", []), item["sentence"])
+            sentences.append(SentenceIn(**{**item, "entities": entities}))
 
         except Exception as exc:
             errors.append(f"{row_label}: {exc}")
@@ -162,7 +178,7 @@ def parse_json(file_bytes: bytes) -> tuple[List[SentenceIn], int]:
     if errors:
         raise IngestionError(errors)
 
-    return sentences, skipped_entities
+    return sentences, 0
 
 
 def validate_offsets_against_text(sentences: List[SentenceIn]) -> None:
