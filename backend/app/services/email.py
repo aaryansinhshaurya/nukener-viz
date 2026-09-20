@@ -4,6 +4,7 @@ import json
 import smtplib
 from email.message import EmailMessage
 from urllib import error, request
+from urllib.parse import urlsplit
 
 from app.config import settings
 
@@ -12,14 +13,33 @@ class EmailDeliveryError(Exception):
     pass
 
 
+def _apps_script_url_is_valid(url: str) -> bool:
+    parsed = urlsplit(url)
+    parts = parsed.path.split("/")
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "script.google.com"
+        and len(parts) == 5
+        and parts[:3] == ["", "macros", "s"]
+        and bool(parts[3])
+        and parts[4] == "exec"
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
 def email_is_configured() -> bool:
+    if settings.APPS_SCRIPT_MAIL_URL or settings.APPS_SCRIPT_MAIL_SECRET:
+        return bool(
+            settings.APPS_SCRIPT_MAIL_SECRET
+            and _apps_script_url_is_valid(settings.APPS_SCRIPT_MAIL_URL)
+        )
     sender = settings.EMAIL_FROM or settings.SMTP_FROM
-    apps_script = settings.APPS_SCRIPT_MAIL_URL and settings.APPS_SCRIPT_MAIL_SECRET
     provider = sender and (
         settings.RESEND_API_KEY
         or (settings.SMTP_HOST and bool(settings.SMTP_USER) == bool(settings.SMTP_PASSWORD))
     )
-    return bool(apps_script or provider)
+    return bool(provider)
 
 
 def send_email(to_address: str, subject: str, body: str) -> None:
@@ -42,11 +62,18 @@ def send_email(to_address: str, subject: str, body: str) -> None:
         try:
             with request.urlopen(email_request, timeout=20) as response:
                 result = json.loads(response.read().decode("utf-8"))
-        except (error.HTTPError, error.URLError, TimeoutError, OSError,
-                UnicodeError, json.JSONDecodeError) as exc:
-            raise EmailDeliveryError("Apps Script email delivery failed") from exc
+        except error.HTTPError as exc:
+            raise EmailDeliveryError(
+                f"Apps Script returned HTTP {exc.code}; check the /exec URL and web app access"
+            ) from exc
+        except (error.URLError, TimeoutError, OSError) as exc:
+            raise EmailDeliveryError("Apps Script request failed; check the deployment URL and access setting") from exc
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise EmailDeliveryError("Apps Script did not return JSON; check the /exec URL and access setting") from exc
         if not isinstance(result, dict) or result.get("ok") is not True:
-            raise EmailDeliveryError("Apps Script rejected the message")
+            if isinstance(result, dict) and result.get("error") == "Unauthorized":
+                raise EmailDeliveryError("Apps Script MAIL_SECRET does not match APPS_SCRIPT_MAIL_SECRET")
+            raise EmailDeliveryError("Apps Script could not send email; check its Executions log")
         return
 
     sender = settings.EMAIL_FROM or settings.SMTP_FROM

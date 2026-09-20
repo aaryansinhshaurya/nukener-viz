@@ -27,7 +27,17 @@ Run the frontend using any static file server. The default API URL in `frontend/
 
 ## Email and accounts
 
-Set `FRONTEND_URL` to the Vercel origin so invitation and reset links open the correct site. **Render Free blocks SMTP ports 25, 465, and 587**, so Gmail SMTP cannot send from a Free backend. For a small private project, deploy a Google Apps Script web app that uses `MailApp.sendEmail`. In Render **backend service → Environment**, set `APPS_SCRIPT_MAIL_URL` to its `/exec` web app URL and `APPS_SCRIPT_MAIL_SECRET` to the same `MAIL_SECRET` stored in Apps Script project settings. Both are required. The script must accept a JSON POST with `secret`, `to`, `subject`, and `body`, and return JSON `{"ok": true}` only after sending. Keep the secret out of GitHub and the frontend. Deployment ID and Script ID are not needed by the backend. Apps Script takes priority over the providers below. After the backend redeploys, test a password reset for an existing account and resend any pending project invitations.
+Set `FRONTEND_URL` to the Vercel origin so invitation and reset links open the correct site. **Render Free blocks SMTP ports 25, 465, and 587**, so Gmail SMTP cannot send from a Free backend. For a small private project, use the [Apps Script mail web app](backend/google_apps_script/Code.gs):
+
+1. Create a Google Apps Script project and replace its entire `Code.gs` with that file. Save it.
+2. In **Project Settings > Script Properties**, add `MAIL_SECRET` with a long random value. Do not include backslashes in the property name. Select `authorizeMail` in the editor, click **Run**, and grant the requested Google mail permission.
+3. Choose **Deploy > New deployment > Web app**. Set **Execute as: Me** and **Who has access: Anyone**. Copy the deployed URL ending in `/exec`. If you later edit the script, use **Deploy > Manage deployments > Edit > New version > Deploy** so `/exec` runs the new code.
+4. In the Render **backend service > Environment**, set `APPS_SCRIPT_MAIL_URL` to that full `/exec` URL and `APPS_SCRIPT_MAIL_SECRET` to the exact same value as `MAIL_SECRET`. Set `FRONTEND_URL` to the frontend origin. Save and redeploy. A Resend key and `EMAIL_FROM` are not needed when using Apps Script; remove placeholder values such as `value`.
+5. Open the `/exec` URL in an incognito browser window. Its JSON response should say the mail endpoint is running. This checks `doGet` and anonymous access only; an actual password reset for an existing account or a project invitation checks `doPost` and `MailApp`. If sending fails, check **Executions** in Apps Script and the Render backend log. Resend previously saved invitations from the project's **Team** tab.
+
+The backend sends JSON containing `secret`, `to`, `subject`, and `body`, and accepts success only after the script returns `{"ok": true}`. Keep the shared secret out of GitHub and the frontend. Deployment ID and Script ID are not needed by the backend. Apps Script takes priority over the providers below. An incomplete Apps Script configuration is reported as unavailable instead of falling back to another provider.
+
+Apps Script sends from the Google account that deployed the web app. The script's `name: "NukeNER-Viz"` changes the visible sender name, not the sender email address. If an invitation fails, inspect the matching `doPost` execution and its logs in Apps Script, then the Render backend log. The text `Apps Script email delivery failed` comes from an older backend version; deploy the current backend to get a more specific error. The invitation remains pending, so use **Team > Resend** after fixing delivery. Editing `Code.gs` also requires deploying a new Apps Script version.
 
 Alternatively, this project supports Resend's HTTPS API:
 

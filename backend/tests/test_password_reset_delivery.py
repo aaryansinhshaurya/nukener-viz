@@ -2,13 +2,15 @@ import json
 import unittest
 import uuid
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from unittest.mock import MagicMock, Mock, patch
 
 from fastapi import HTTPException
 
 from app.routers.auth import forgot_password
 from app.schemas.auth import ForgotPasswordRequest
-from app.services.email import EmailDeliveryError, send_email
+from app.routers.projects import _send_invitation
+from app.services.email import EmailDeliveryError, email_is_configured, send_email
 
 
 class PasswordResetDeliveryTests(unittest.TestCase):
@@ -57,8 +59,42 @@ class PasswordResetDeliveryTests(unittest.TestCase):
             settings.APPS_SCRIPT_MAIL_SECRET = "private-test-secret"
             urlopen.return_value.__enter__.return_value.read.return_value = b'{"ok": false, "error": "Unauthorized"}'
 
-            with self.assertRaises(EmailDeliveryError):
+            with self.assertRaisesRegex(EmailDeliveryError, "MAIL_SECRET does not match"):
                 send_email("user@example.com", "Reset your password", "Reset link")
+
+    def test_apps_script_http_error_reports_status(self):
+        with patch("app.services.email.settings") as settings, patch("app.services.email.request.urlopen") as urlopen:
+            settings.APPS_SCRIPT_MAIL_URL = "https://script.google.com/macros/s/test/exec"
+            settings.APPS_SCRIPT_MAIL_SECRET = "private-test-secret"
+            urlopen.side_effect = HTTPError(settings.APPS_SCRIPT_MAIL_URL, 403, "Forbidden", {}, None)
+
+            with self.assertRaisesRegex(EmailDeliveryError, "HTTP 403"):
+                send_email("user@example.com", "Invitation", "Invite link")
+
+    def test_incomplete_apps_script_settings_do_not_fall_back_to_resend(self):
+        with patch("app.services.email.settings") as settings:
+            settings.APPS_SCRIPT_MAIL_URL = "https://script.google.com/macros/s/test/exec"
+            settings.APPS_SCRIPT_MAIL_SECRET = ""
+            settings.RESEND_API_KEY = "placeholder"
+            settings.EMAIL_FROM = "review@example.com"
+            settings.SMTP_FROM = ""
+            self.assertFalse(email_is_configured())
+            with self.assertRaisesRegex(EmailDeliveryError, "not configured"):
+                send_email("user@example.com", "Reset your password", "Reset link")
+
+    def test_apps_script_requires_a_deployed_exec_url(self):
+        with patch("app.services.email.settings") as settings:
+            settings.APPS_SCRIPT_MAIL_URL = "https://script.google.com/macros/s/test/dev"
+            settings.APPS_SCRIPT_MAIL_SECRET = "private-test-secret"
+            self.assertFalse(email_is_configured())
+
+    def test_invitation_uses_invited_address_and_frontend_link(self):
+        invitation = SimpleNamespace(email="colleague@example.com", role=SimpleNamespace(value="reviewer"))
+        with patch("app.routers.projects.settings") as settings, patch("app.routers.projects.send_email") as send:
+            settings.FRONTEND_URL = "https://review.example.com"
+            _send_invitation(invitation, "Fusion Research", "invite-token")
+        self.assertEqual(send.call_args.args[0], "colleague@example.com")
+        self.assertIn("https://review.example.com/?invite=invite-token", send.call_args.args[2])
 
     def setUp(self):
         self.payload = ForgotPasswordRequest(email="user@example.com")

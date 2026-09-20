@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
@@ -16,6 +17,7 @@ from app.config import settings
 from app.auth.dependencies import get_current_user, require_project_role
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
@@ -116,6 +118,7 @@ def invite_member(
     try:
         _send_invitation(invitation, project.name, raw)
     except EmailDeliveryError as exc:
+        logger.exception("Project invitation email delivery failed")
         raise HTTPException(status_code=503, detail=f"Invitation saved but email delivery failed: {exc}") from exc
     return _invitation_out(invitation)
 
@@ -156,6 +159,7 @@ def resend_invitation(project_id: uuid.UUID, invitation_id: uuid.UUID,
     try:
         _send_invitation(row, db.get(Project, project_id).name, raw)
     except EmailDeliveryError as exc:
+        logger.exception("Project invitation resend email delivery failed")
         raise HTTPException(status_code=503, detail=f"Email delivery failed: {exc}") from exc
     return _invitation_out(row)
 
