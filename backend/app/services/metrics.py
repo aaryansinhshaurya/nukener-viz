@@ -1,10 +1,22 @@
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.models.document import Document, Sentence, Entity, EntitySource
 from app.models.review import ReviewVerdict
 from app.services.reviews import get_latest_reviews_map
+
+
+@dataclass
+class ClassMetricsResult:
+    label: str
+    tp: int
+    fp: int
+    total_model_entities: int
+    reviewed_model_entities: int
+    percent_reviewed: float
+    precision: Optional[float]
 
 
 @dataclass
@@ -15,34 +27,54 @@ class MetricsResult:
     reviewed_model_entities: int
     percent_reviewed: float
     precision: Optional[float]
+    class_metrics: list[ClassMetricsResult]
+
+
+def _compute_counts(entities: list[Entity], latest_reviews: dict) -> dict:
+    """Return precision and coverage counts for one collection of predictions."""
+    tp = sum(
+        1 for entity in entities
+        if (review := latest_reviews.get(entity.id)) is not None
+        and review.verdict == ReviewVerdict.TP
+    )
+    fp = sum(
+        1 for entity in entities
+        if (review := latest_reviews.get(entity.id)) is not None
+        and review.verdict == ReviewVerdict.FP
+    )
+    total_model = len(entities)
+    reviewed_model = tp + fp
+
+    return {
+        "tp": tp,
+        "fp": fp,
+        "total_model_entities": total_model,
+        "reviewed_model_entities": reviewed_model,
+        "percent_reviewed": (
+            100.0 if total_model == 0
+            else round(100.0 * reviewed_model / total_model, 2)
+        ),
+        "precision": round(tp / reviewed_model, 4) if reviewed_model > 0 else None,
+    }
 
 
 def _compute_metrics_for_entities(entities: list[Entity], latest_reviews: dict) -> MetricsResult:
-    """Evaluate only model predictions that have a TP or FP review."""
+    """Compute overall and per-class metrics for model predictions."""
     model_entities = [e for e in entities if e.source == EntitySource.MODEL]
+    entities_by_label = defaultdict(list)
+    for entity in model_entities:
+        entities_by_label[entity.label].append(entity)
 
-    tp = sum(
-        1 for e in model_entities
-        if (r := latest_reviews.get(e.id)) is not None and r.verdict == ReviewVerdict.TP
-    )
-    fp = sum(
-        1 for e in model_entities
-        if (r := latest_reviews.get(e.id)) is not None and r.verdict == ReviewVerdict.FP
-    )
-    total_model = len(model_entities)
-    reviewed_model = tp + fp
-    # Nothing to review = fully done, not "0% reviewed" — avoids a
-    # freshly-uploaded-but-empty document looking incomplete.
-    percent_reviewed = 100.0 if total_model == 0 else round(100.0 * reviewed_model / total_model, 2)
+    class_metrics = [
+        ClassMetricsResult(label=label, **_compute_counts(class_entities, latest_reviews))
+        for label, class_entities in sorted(
+            entities_by_label.items(), key=lambda item: item[0].casefold()
+        )
+    ]
 
-    precision = round(tp / (tp + fp), 4) if (tp + fp) > 0 else None
     return MetricsResult(
-        tp=tp,
-        fp=fp,
-        total_model_entities=total_model,
-        reviewed_model_entities=reviewed_model,
-        percent_reviewed=percent_reviewed,
-        precision=precision,
+        **_compute_counts(model_entities, latest_reviews),
+        class_metrics=class_metrics,
     )
 
 

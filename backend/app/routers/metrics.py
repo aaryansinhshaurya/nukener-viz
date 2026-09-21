@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db import get_db
@@ -19,11 +20,9 @@ def project_metrics(
     _membership: ProjectMember = Depends(require_project_role(ANY_ROLE)),
     db: Session = Depends(get_db),
 ):
-    """Aggregated Precision/Recall/F1 across every document in the
-    project, computed live from the current reviews table — no cached or
-    batch-computed numbers to go stale."""
+    """Overall and per-class precision/coverage across the project."""
     result = get_project_metrics(db, project_id)
-    return MetricsOut(**result.__dict__)
+    return MetricsOut(**asdict(result))
 
 
 @router.get("/documents/{doc_id_external}/metrics", response_model=MetricsOut)
@@ -42,4 +41,4 @@ def document_metrics(
         raise HTTPException(status_code=404, detail="Document not found")
 
     result = get_document_metrics(db, document.id)
-    return MetricsOut(**result.__dict__)
+    return MetricsOut(**asdict(result))
