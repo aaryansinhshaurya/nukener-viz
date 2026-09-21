@@ -953,14 +953,31 @@ async function loadMetrics() {
 function metricCards(m, title) {
   return `<h4 style="margin:0 0 10px;font-size:13.5px">${esc(title)}</h4>
     <div class="metric-cards">
-      <div class="metric-card"><div class="metric-val" style="color:#12a454">${pct(m.precision)}</div><div class="metric-lbl">Precision</div><div class="metric-sub">TP=${m.tp} / FP=${m.fp}</div></div>
+      <div class="metric-card"><div class="metric-val" style="color:#12a454">${pct(m.precision)}</div><div class="metric-lbl">Overall precision</div><div class="metric-sub">TP=${m.tp} / FP=${m.fp}</div></div>
       <div class="metric-card"><div class="metric-val" style="color:#0a84ff">${m.percent_reviewed}%</div><div class="metric-lbl">Review coverage</div><div class="metric-sub">${m.reviewed_model_entities} of ${m.total_model_entities} predictions</div></div>
       <div class="metric-card"><div class="metric-val">${m.tp + m.fp}</div><div class="metric-lbl">Reviewed predictions</div><div class="metric-sub">${m.tp} TP · ${m.fp} FP</div></div>
     </div>`;
 }
+function classMetricsTable(m, title) {
+  const rows = (m.class_metrics || []).map(c => `<tr>
+    <td>${esc(c.label)}</td>
+    <td class="num">${c.tp}</td>
+    <td class="num">${c.fp}</td>
+    <td class="num">${pct(c.precision)}</td>
+    <td class="num">${c.reviewed_model_entities} / ${c.total_model_entities}</td>
+    <td class="num">${c.percent_reviewed}%</td>
+  </tr>`).join("");
+  return `<h4 style="margin:18px 0 10px;font-size:13.5px">${esc(title)}</h4>
+    ${rows ? `<div style="overflow-x:auto"><table class="metrics-table">
+      <thead><tr><th>Class</th><th>TP</th><th>FP</th><th>Precision</th><th>Reviewed / Total</th><th>Coverage</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>` : `<div class="empty-state">No model predictions</div>`}`;
+}
 function renderMetrics(project, doc) {
-  let html = `<div class="btn-group" style="margin-bottom:16px"><button class="btn btn-ghost" onclick="downloadExport('csv')">Export CSV</button><button class="btn btn-ghost" onclick="downloadExport('json')">Export JSON</button></div>` + metricCards(project, "Project-wide");
-  if (doc) html += `<div style="margin-top:20px">${metricCards(doc, `Current document — ${esc(S.currentDoc)}`)}</div>`;
+  let html = `<div class="btn-group" style="margin-bottom:16px"><button class="btn btn-ghost" onclick="downloadExport('csv')">Export CSV</button><button class="btn btn-ghost" onclick="downloadExport('json')">Export JSON</button></div>`
+    + metricCards(project, "Project-wide summary")
+    + classMetricsTable(project, "Project metrics by class");
+  if (doc) html += `<div style="margin-top:28px">${metricCards(doc, `Current document — ${esc(S.currentDoc)}`)}${classMetricsTable(doc, "Current document metrics by class")}</div>`;
   _qs("metricsPanel").innerHTML = html;
 }
 

@@ -94,8 +94,12 @@ class IngestionTests(unittest.TestCase):
 class PrecisionTests(unittest.TestCase):
     def test_only_reviewed_predictions_affect_precision(self):
         ids = [uuid.uuid4() for _ in range(4)]
-        entities = [SimpleNamespace(id=ids[i], source=EntitySource.MODEL) for i in range(3)]
-        entities.append(SimpleNamespace(id=ids[3], source=EntitySource.HUMAN))
+        entities = [
+            SimpleNamespace(id=ids[0], source=EntitySource.MODEL, label="ORG"),
+            SimpleNamespace(id=ids[1], source=EntitySource.MODEL, label="ORG"),
+            SimpleNamespace(id=ids[2], source=EntitySource.MODEL, label="DEVICE"),
+            SimpleNamespace(id=ids[3], source=EntitySource.HUMAN, label="ORG"),
+        ]
         reviews = {ids[0]: SimpleNamespace(verdict=ReviewVerdict.TP),
                    ids[1]: SimpleNamespace(verdict=ReviewVerdict.FP),
                    ids[3]: SimpleNamespace(verdict=ReviewVerdict.FN)}
@@ -103,6 +107,14 @@ class PrecisionTests(unittest.TestCase):
         self.assertEqual((result.tp, result.fp, result.total_model_entities), (1, 1, 3))
         self.assertEqual(result.precision, 0.5)
         self.assertEqual(result.percent_reviewed, 66.67)
+
+        by_label = {metric.label: metric for metric in result.class_metrics}
+        self.assertEqual(set(by_label), {"DEVICE", "ORG"})
+        self.assertEqual((by_label["ORG"].tp, by_label["ORG"].fp), (1, 1))
+        self.assertEqual(by_label["ORG"].precision, 0.5)
+        self.assertEqual(by_label["ORG"].percent_reviewed, 100.0)
+        self.assertIsNone(by_label["DEVICE"].precision)
+        self.assertEqual(by_label["DEVICE"].percent_reviewed, 0.0)
 
 
 class VersionTests(unittest.TestCase):
