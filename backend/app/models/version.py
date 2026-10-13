@@ -7,7 +7,7 @@ from app.db import Base
 
 
 class ProjectVersion(Base):
-    """A full point-in-time snapshot of a project's documents, sentences,
+    """A full point-in-time snapshot of a project's documents, chunks,
     entities, and review verdicts, stored as one JSON blob. Snapshotting
     the whole tree (instead of diffing) is what keeps revert trivial and
     correct — revert just replaces current rows with what's in the blob,

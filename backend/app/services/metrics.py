@@ -3,7 +3,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional
 from sqlalchemy.orm import Session
-from app.models.document import Document, Sentence, Entity, EntitySource
+from app.models.document import Document, Chunk, Entity, EntitySource
 from app.models.review import ReviewVerdict
 from app.services.reviews import get_latest_reviews_map
 
@@ -81,8 +81,8 @@ def _compute_metrics_for_entities(entities: list[Entity], latest_reviews: dict) 
 def get_document_metrics(db: Session, document_id: uuid.UUID) -> MetricsResult:
     entities = (
         db.query(Entity)
-        .join(Sentence, Entity.sentence_id == Sentence.id)
-        .filter(Sentence.document_id == document_id)
+        .join(Chunk, Entity.chunk_id == Chunk.id)
+        .filter(Chunk.document_id == document_id)
         .all()
     )
     latest_reviews = get_latest_reviews_map(db, [e.id for e in entities])
@@ -92,8 +92,8 @@ def get_document_metrics(db: Session, document_id: uuid.UUID) -> MetricsResult:
 def get_project_metrics(db: Session, project_id: uuid.UUID) -> MetricsResult:
     entities = (
         db.query(Entity)
-        .join(Sentence, Entity.sentence_id == Sentence.id)
-        .join(Document, Sentence.document_id == Document.id)
+        .join(Chunk, Entity.chunk_id == Chunk.id)
+        .join(Document, Chunk.document_id == Document.id)
         .filter(Document.project_id == project_id)
         .all()
     )

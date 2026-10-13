@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.project import ProjectMember, ProjectRole
-from app.models.document import Document, Sentence, Entity, EntitySource
+from app.models.document import Document, Chunk, Entity, EntitySource
 from app.models.review import Review, ReviewVerdict
 from app.models.user import User
 from app.schemas.review import ReviewCreate, ReviewOut
@@ -17,14 +17,14 @@ ANY_ROLE = [ProjectRole.OWNER, ProjectRole.REVIEWER, ProjectRole.VIEWER]
 
 
 def _get_entity_in_project(db: Session, project_id: uuid.UUID, entity_id: uuid.UUID) -> Entity:
-    """Confirms the entity actually belongs to a sentence/document under
+    """Confirms the entity actually belongs to a chunk/document under
     this project — not just that the entity_id exists somewhere in the DB.
     Prevents one project's members from touching another project's data
     by guessing/reusing an entity_id."""
     entity = (
         db.query(Entity)
-        .join(Sentence, Entity.sentence_id == Sentence.id)
-        .join(Document, Sentence.document_id == Document.id)
+        .join(Chunk, Entity.chunk_id == Chunk.id)
+        .join(Document, Chunk.document_id == Document.id)
         .filter(Entity.id == entity_id, Document.project_id == project_id)
         .first()
     )
@@ -57,8 +57,8 @@ async def submit_review(
     Submitting again later (e.g. changing your mind) just adds a new row —
     the old verdict is preserved, not overwritten."""
     entity = _get_entity_in_project(db, project_id, entity_id)
-    sentence = db.get(Sentence, entity.sentence_id)
-    lock = get_active_lock(db, sentence.document_id)
+    chunk = db.get(Chunk, entity.chunk_id)
+    lock = get_active_lock(db, chunk.document_id)
     if lock is None or lock.locked_by != membership.user_id:
         raise HTTPException(status_code=409, detail="Lock this document before reviewing it")
 
@@ -80,7 +80,7 @@ async def submit_review(
     db.add(review)
     db.commit()
     db.refresh(review)
-    await lock_manager.broadcast(project_id, {"type": "review", "document_id": str(sentence.document_id)})
+    await lock_manager.broadcast(project_id, {"type": "review", "document_id": str(chunk.document_id)})
     return _to_review_out(db, review)
 
 

@@ -335,13 +335,13 @@ code { font-family: "DM Mono", ui-monospace, monospace; font-size: 12px; }
 .format-hint { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; justify-content: center; }
 .hint-block { background: var(--soft-surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; font-size: 11.5px; text-align: left; max-width: 220px; }
 
-/* ── Sentence / entity annotation ─────────────────────────── */
+/* ── Chunk / entity annotation ─────────────────────────── */
 .sent-card {
   background: var(--soft-surface); border: 1px solid var(--line); border-radius: var(--radius-md);
   padding: 14px 16px; margin-bottom: 10px;
 }
 .sent-meta { font-size: 10.5px; font-weight: 700; color: var(--t3); letter-spacing: .03em; margin-bottom: 6px; }
-.sent-text { font-size: 14.5px; line-height: 2.1; user-select: text; }
+.sent-text { font-size: 14.5px; line-height: 2.1; user-select: text; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .ent-wrap { position: relative; display: inline; }
 .entity { border-bottom: 2.5px solid; border-radius: 3px; padding: 1px 2px; cursor: pointer; transition: filter .1s; }
@@ -356,7 +356,8 @@ code { font-family: "DM Mono", ui-monospace, monospace; font-size: 12px; }
   padding: 5px 6px; align-items: center; gap: 5px; white-space: nowrap; z-index: 20; box-shadow: var(--shadow-2);
 }
 .ent-wrap.open .ent-bar { display: flex; }
-.ent-label-tip { font-size: 10.5px; color: rgba(255,255,255,.65); padding: 0 4px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.ent-label-tip { font-size: 10.5px; color: rgba(255,255,255,.65); padding: 0 4px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.ent-confidence { font-size: 10.5px; color: rgba(255,255,255,.85); padding: 0 4px; font-variant-numeric: tabular-nums; }
 .ent-btn { border: none; background: rgba(255,255,255,.12); color: #fff; font-size: 11px; font-weight: 700; padding: 5px 9px; border-radius: 7px; cursor: pointer; }
 .ent-btn:hover { background: rgba(255,255,255,.22); }
 .ent-btn-tp.ent-active-tp { background: var(--ok); }

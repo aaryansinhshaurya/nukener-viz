@@ -1,6 +1,6 @@
 from app.models.user import User
 from app.models.project import Project, ProjectMember, ProjectRole, MemberStatus
-from app.models.document import Document, Sentence, Entity, EntitySource
+from app.models.document import Document, Chunk, Entity, EntitySource
 from app.models.review import Review, ReviewVerdict
 from app.models.locking import DocumentLock
 from app.models.version import ProjectVersion
@@ -13,7 +13,7 @@ __all__ = [
     "ProjectRole",
     "MemberStatus",
     "Document",
-    "Sentence",
+    "Chunk",
     "Entity",
     "EntitySource",
     "Review",

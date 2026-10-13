@@ -113,7 +113,7 @@ def list_locks(
 @router.websocket("/ws")
 async def project_lock_socket(websocket: WebSocket, project_id: uuid.UUID, token: str):
     """One persistent connection per active user per project, used only
-    for lock/unlock broadcasts — all real data (sentences, entities,
+    for lock/unlock broadcasts — all real data (chunks, entities,
     reviews) still goes through the plain REST endpoints above.
     Browsers can't set an Authorization header on a WebSocket handshake,
     so the access token travels as a query param instead: wss://.../ws?token=...

@@ -113,7 +113,7 @@
         <input type="file" id="uploadFileInput" accept=".csv,.json" style="display:none">
         <div class="upload-icon">📂</div>
         <div class="upload-label">Click to upload or drag &amp; drop</div>
-        <div class="upload-sub">CSV or JSON — document_id, filename, source, cleaned_title, sentence_id, sentence, entities. Entity offsets are optional. Re-upload the same dataset to add missing entities to an existing project.</div>
+        <div class="upload-sub">CSV or JSON — document_id, source, cleaned_title, chunk_id, chunk_text, entities, triplets. Run the offset script before upload.</div>
       </label>
       <div id="uploadStatus" class="status-line"></div>
     </div>
@@ -155,7 +155,7 @@
     <div class="topbar-right">
       <div class="stat-row" id="statRow" style="display:none">
         <span class="chip" id="sDoc">0 docs</span>
-        <span class="chip" id="sSent">0 sentences</span>
+        <span class="chip" id="sChunk">0 chunks</span>
         <span class="chip" id="sEnt">0 entities</span>
         <span class="chip" id="sType">0 types</span>
       </div>
@@ -216,13 +216,13 @@
             <h2>Open a project to begin</h2>
             <p>Create or open a project using the <strong>⊕ Projects</strong> button above.</p>
             <div class="format-hint">
-              <div class="hint-block"><strong>CSV columns</strong><br>document_id, filename, source, cleaned_title, sentence_id, sentence, entities<br><code>entities: [{"text":"...","label":"..."}]</code><br>Character offsets are optional when the text appears in the sentence.</div>
-              <div class="hint-block">If you provide offsets, the importer checks them against the sentence. Without offsets, it finds the entity text for you.</div>
-              <div class="hint-block"><strong>JSON</strong><br>a list of objects with the same fields, one per sentence. Filename, source, and title may be blank.</div>
+              <div class="hint-block"><strong>CSV columns</strong><br>source, document_id, cleaned_title, chunk_id, chunk_text, entities, triplets<br><code>entities: [{"entity_text":"...","entity_class":"...","start_char":0,"end_char":3}]</code></div>
+              <div class="hint-block">Run <code>scripts/add_entity_offsets.py</code> on your results, then upload its output. Offsets are checked against each chunk. Triplets are ignored in this phase.</div>
+              <div class="hint-block"><strong>JSON</strong><br>a list of chunk objects with the same fields and enriched entities.</div>
             </div>
           </div>
 
-          <div id="sentencePane"></div>
+          <div id="chunkPane"></div>
           <div id="metricsPanel"></div>
           <div id="teamPanel"></div>
           <div id="versionsPanel"></div>
@@ -232,6 +232,6 @@
   </div>
 </div>
 
-<script src="app.js?v=20260920-import-warnings"></script>
+<script src="app.js?v=20261013-chunk-entities"></script>
 </body>
 </html>

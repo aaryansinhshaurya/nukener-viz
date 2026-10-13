@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, Integer, UniqueConstraint, Text, Enum
+from sqlalchemy import String, DateTime, ForeignKey, Integer, UniqueConstraint, Text, Enum, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 from app.db import Base
@@ -24,24 +24,24 @@ class Document(Base):
     )
 
     project = relationship("Project", back_populates="documents")
-    sentences = relationship("Sentence", back_populates="document", cascade="all, delete-orphan")
+    chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
 
 
-class Sentence(Base):
-    __tablename__ = "sentences"
-    __table_args__ = (UniqueConstraint("document_id", "sentence_id_external", name="uq_document_sentence"),)
+class Chunk(Base):
+    __tablename__ = "chunks"
+    __table_args__ = (UniqueConstraint("document_id", "chunk_id_external", name="uq_document_chunk"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False)
-    # The sentence_id from the uploaded file (e.g. "D085-S052")
-    sentence_id_external: Mapped[str] = mapped_column(String(255), nullable=False)
+    chunk_id_external: Mapped[str] = mapped_column(String(255), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    document = relationship("Document", back_populates="sentences")
-    entities = relationship("Entity", back_populates="sentence", cascade="all, delete-orphan")
+    document = relationship("Document", back_populates="chunks")
+    entities = relationship("Entity", back_populates="chunk", cascade="all, delete-orphan")
 
 
 class EntitySource(str, enum.Enum):
@@ -53,18 +53,17 @@ class Entity(Base):
     __tablename__ = "entities"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    sentence_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sentences.id"), nullable=False)
+    chunk_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("chunks.id"), nullable=False)
     text: Mapped[str] = mapped_column(String(500), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
-    # Character offsets into the parent sentence's text — required at
-    # ingestion, not computed later. This is what makes highlighting in
-    # the UI unambiguous even when a word repeats in a sentence.
+    # Character offsets into the parent chunk's text.
     start_char: Mapped[int] = mapped_column(Integer, nullable=False)
     end_char: Mapped[int] = mapped_column(Integer, nullable=False)
+    confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[EntitySource] = mapped_column(Enum(EntitySource), default=EntitySource.MODEL, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    sentence = relationship("Sentence", back_populates="entities")
+    chunk = relationship("Chunk", back_populates="entities")
     reviews = relationship("Review", back_populates="entity", cascade="all, delete-orphan")

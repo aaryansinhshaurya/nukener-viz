@@ -6,31 +6,30 @@ from app.schemas.review import ReviewOut
 
 
 class EntityIn(BaseModel):
-    text: str
-    label: str
+    entity_text: str
+    entity_class: str
+    entity_confidence_score: float | None = None
     start_char: int
     end_char: int
 
     @model_validator(mode="after")
     def check_offsets(self):
         if self.start_char < 0 or self.end_char <= self.start_char:
-            raise ValueError(
-                f"invalid character offsets for entity '{self.text}': "
-                f"start_char={self.start_char}, end_char={self.end_char}"
-            )
+            raise ValueError(f"invalid offsets for entity {self.entity_text!r}")
+        if not self.entity_text or not self.entity_class:
+            raise ValueError("entity_text and entity_class cannot be empty")
         return self
 
 
-class SentenceIn(BaseModel):
+class ChunkIn(BaseModel):
     document_id: str
-    filename: str | None = None
     source: str | None = None
     cleaned_title: str | None = None
-    sentence_id: str
-    sentence: str
-    entities: list[EntityIn] = []
+    chunk_id: str
+    chunk_text: str
+    entities: list[EntityIn] = Field(default_factory=list)
 
-    @field_validator("filename", "source", "cleaned_title", mode="before")
+    @field_validator("source", "cleaned_title", mode="before")
     @classmethod
     def blank_metadata_is_missing(cls, value):
         return value.strip() or None if isinstance(value, str) else value
@@ -38,49 +37,43 @@ class SentenceIn(BaseModel):
 
 class UploadSummary(BaseModel):
     documents_created: int
-    sentences_created: int
+    chunks_created: int
     entities_created: int
-    entities_skipped_missing_offsets: int = 0
-    skipped_entity_details: list[str] = Field(default_factory=list)
 
 
 class EntityOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: uuid.UUID
     text: str
     label: str
     start_char: int
     end_char: int
+    confidence_score: float | None = None
     source: EntitySource
-    # The most recent review verdict for this entity, or None if nobody
-    # has reviewed it yet. Populated by the documents router, not by a
-    # plain ORM attribute — see get_document().
     current_review: Optional[ReviewOut] = None
 
 
-class SentenceOut(BaseModel):
+class ChunkOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: uuid.UUID
-    sentence_id_external: str
+    chunk_id_external: str
     text: str
     entities: list[EntityOut]
 
 
 class DocumentSummaryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: uuid.UUID
     doc_id_external: str
-    sentence_count: int
+    chunk_count: int
     source: str | None = None
+    cleaned_title: str | None = None
 
 
 class DocumentDetailOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-
     id: uuid.UUID
     doc_id_external: str
     source: str | None = None
-    sentences: list[SentenceOut]
+    cleaned_title: str | None = None
+    chunks: list[ChunkOut]

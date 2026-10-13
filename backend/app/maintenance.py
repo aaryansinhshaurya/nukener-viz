@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.db import SessionLocal
-from app.models.document import Document, Sentence, Entity
+from app.models.document import Document, Chunk, Entity
 from app.models.locking import DocumentLock
 from app.models.project import Project, ProjectMember
 from app.models.review import Review
@@ -19,11 +19,11 @@ def purge_expired_projects() -> int:
         for project in projects:
             try:
                 document_ids = db.query(Document.id).filter(Document.project_id == project.id)
-                sentence_ids = db.query(Sentence.id).filter(Sentence.document_id.in_(document_ids))
-                entity_ids = db.query(Entity.id).filter(Entity.sentence_id.in_(sentence_ids))
+                chunk_ids = db.query(Chunk.id).filter(Chunk.document_id.in_(document_ids))
+                entity_ids = db.query(Entity.id).filter(Entity.chunk_id.in_(chunk_ids))
                 db.query(Review).filter(Review.entity_id.in_(entity_ids)).delete(synchronize_session=False)
-                db.query(Entity).filter(Entity.sentence_id.in_(sentence_ids)).delete(synchronize_session=False)
-                db.query(Sentence).filter(Sentence.document_id.in_(document_ids)).delete(synchronize_session=False)
+                db.query(Entity).filter(Entity.chunk_id.in_(chunk_ids)).delete(synchronize_session=False)
+                db.query(Chunk).filter(Chunk.document_id.in_(document_ids)).delete(synchronize_session=False)
                 db.query(DocumentLock).filter(DocumentLock.document_id.in_(document_ids)).delete(synchronize_session=False)
                 db.query(Document).filter(Document.project_id == project.id).delete(synchronize_session=False)
                 db.query(ProjectVersion).filter(ProjectVersion.project_id == project.id).delete(synchronize_session=False)

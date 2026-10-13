@@ -3,17 +3,16 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from sqlalchemy.orm import Session, selectinload
 from app.db import get_db
 from app.models.project import ProjectMember, ProjectRole
-from app.models.document import Document, Sentence, Entity, EntitySource
+from app.models.document import Document, Chunk, Entity, EntitySource
 from app.models.user import User
-from app.schemas.document import UploadSummary, DocumentSummaryOut, DocumentDetailOut, SentenceOut, EntityOut, SentenceIn
+from app.schemas.document import UploadSummary, DocumentSummaryOut, DocumentDetailOut, ChunkOut, EntityOut, ChunkIn
 from app.schemas.review import ReviewOut
 from app.auth.dependencies import require_project_role
-from app.services.ingestion import parse_csv, parse_json, validate_offsets_against_text, IngestionError
+from app.services.ingestion import parse_csv, parse_json, validate_chunks, IngestionError
 from app.services.reviews import get_latest_reviews_map
 from app.config import settings
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["documents"])
-
 ANY_ROLE = [ProjectRole.OWNER, ProjectRole.REVIEWER, ProjectRole.VIEWER]
 
 
@@ -24,133 +23,97 @@ def upload_dataset(
     _membership: ProjectMember = Depends(require_project_role([ProjectRole.OWNER])),
     db: Session = Depends(get_db),
 ):
-    """Create a dataset, or add missing predictions from the same dataset."""
-
+    """Create a chunk dataset, or add missing predictions from the same one."""
     raw = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
     if len(raw) > settings.MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
     filename = (file.filename or "").lower()
-    skipped_details: list[str] = []
-
     try:
         if filename.endswith(".json"):
-            sentences, skipped_entities = parse_json(raw, skipped_details)
+            chunks = parse_json(raw)
         elif filename.endswith(".csv"):
-            sentences, skipped_entities = parse_csv(raw, skipped_details)
+            chunks = parse_csv(raw)
         else:
             raise IngestionError(["Unsupported file type — upload a .csv or .json file"])
-
-        validate_offsets_against_text(sentences)
+        validate_chunks(chunks)
     except IngestionError as exc:
-        raise HTTPException(status_code=422, detail={"errors": exc.errors})
+        raise HTTPException(status_code=422, detail={"errors": exc.errors}) from exc
 
     existing_documents = (
         db.query(Document)
-        .options(selectinload(Document.sentences).selectinload(Sentence.entities))
+        .options(selectinload(Document.chunks).selectinload(Chunk.entities))
         .filter(Document.project_id == project_id)
         .all()
     )
     if existing_documents:
-        return _add_missing_entities(db, existing_documents, sentences, skipped_entities, skipped_details)
-
-    if skipped_entities and not any(sentence.entities for sentence in sentences):
-        raise HTTPException(
-            status_code=422,
-            detail={"errors": ["No entity text matched any uploaded sentence.", *skipped_details[:10]]},
-        )
+        return _add_missing_entities(db, existing_documents, chunks)
 
     doc_map: dict[str, Document] = {}
-    sentences_created = 0
     entities_created = 0
-
-    for s in sentences:
-        if s.document_id not in doc_map:
-            document = Document(project_id=project_id, doc_id_external=s.document_id,
-                                filename=s.filename, source=s.source, cleaned_title=s.cleaned_title)
-            db.add(document)
-            db.flush()  # assigns document.id for the sentence FK below
-            doc_map[s.document_id] = document
-
-        document = doc_map[s.document_id]
-        sentence_row = Sentence(
-            document_id=document.id,
-            sentence_id_external=s.sentence_id,
-            text=s.sentence,
-        )
-        db.add(sentence_row)
-        db.flush()
-        sentences_created += 1
-
-        for e in s.entities:
-            db.add(
-                Entity(
-                    sentence_id=sentence_row.id,
-                    text=e.text,
-                    label=e.label,
-                    start_char=e.start_char,
-                    end_char=e.end_char,
-                )
+    positions: dict[str, int] = {}
+    for item in chunks:
+        if item.document_id not in doc_map:
+            document = Document(
+                project_id=project_id, doc_id_external=item.document_id,
+                source=item.source, cleaned_title=item.cleaned_title,
             )
+            db.add(document)
+            db.flush()
+            doc_map[item.document_id] = document
+        chunk = Chunk(
+            document_id=doc_map[item.document_id].id,
+            chunk_id_external=item.chunk_id, text=item.chunk_text,
+            position=positions.get(item.document_id, 0),
+        )
+        positions[item.document_id] = chunk.position + 1
+        db.add(chunk)
+        db.flush()
+        for prediction in item.entities:
+            db.add(Entity(
+                chunk_id=chunk.id, text=prediction.entity_text,
+                label=prediction.entity_class,
+                start_char=prediction.start_char, end_char=prediction.end_char,
+                confidence_score=prediction.entity_confidence_score,
+            ))
             entities_created += 1
-
     db.commit()
-
     return UploadSummary(
-        documents_created=len(doc_map),
-        sentences_created=sentences_created,
+        documents_created=len(doc_map), chunks_created=len(chunks),
         entities_created=entities_created,
-        entities_skipped_missing_offsets=skipped_entities,
-        skipped_entity_details=skipped_details[:50],
     )
 
 
-def _add_missing_entities(
-    db: Session, documents: list[Document], sentences: list[SentenceIn],
-    skipped_entities: int = 0, skipped_details: list[str] | None = None,
-) -> UploadSummary:
-    """Repair an old import while preserving its reviews and document IDs."""
+def _add_missing_entities(db: Session, documents: list[Document], chunks: list[ChunkIn]) -> UploadSummary:
+    """Preserve reviews on repeat upload of an identical chunk dataset."""
     existing = {
-        (document.doc_id_external, sentence.sentence_id_external): sentence
-        for document in documents for sentence in document.sentences
+        (document.doc_id_external, chunk.chunk_id_external): chunk
+        for document in documents for chunk in document.chunks
     }
-    uploaded = {(sentence.document_id, sentence.sentence_id) for sentence in sentences}
+    uploaded = {(chunk.document_id, chunk.chunk_id) for chunk in chunks}
     if uploaded != set(existing):
-        raise HTTPException(
-            status_code=409,
-            detail="This project has a different set of documents or sentences. Re-upload the original dataset to add missing entities.",
-        )
-
-    for sentence in sentences:
-        stored = existing[(sentence.document_id, sentence.sentence_id)]
-        if stored.text != sentence.sentence:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Sentence {sentence.sentence_id} differs from the existing dataset. No entities were added.",
-            )
-
+        raise HTTPException(status_code=409, detail="This project has different documents or chunks. Create a new project for a different dataset.")
+    for item in chunks:
+        stored = existing[(item.document_id, item.chunk_id)]
+        if stored.text != item.chunk_text:
+            raise HTTPException(status_code=409, detail=f"Chunk {item.chunk_id} differs from the existing dataset. No entities were added.")
     added = 0
-    for sentence in sentences:
-        stored = existing[(sentence.document_id, sentence.sentence_id)]
-        known = {
-            (entity.start_char, entity.end_char, entity.label)
-            for entity in stored.entities if entity.source == EntitySource.MODEL
-        }
-        for entity in sentence.entities:
-            key = (entity.start_char, entity.end_char, entity.label)
+    for item in chunks:
+        stored = existing[(item.document_id, item.chunk_id)]
+        known = {(e.start_char, e.end_char, e.label) for e in stored.entities if e.source == EntitySource.MODEL}
+        for prediction in item.entities:
+            key = (prediction.start_char, prediction.end_char, prediction.entity_class)
             if key in known:
                 continue
             db.add(Entity(
-                sentence_id=stored.id, text=entity.text, label=entity.label,
-                start_char=entity.start_char, end_char=entity.end_char,
+                chunk_id=stored.id, text=prediction.entity_text,
+                label=prediction.entity_class,
+                start_char=prediction.start_char, end_char=prediction.end_char,
+                confidence_score=prediction.entity_confidence_score,
             ))
             known.add(key)
             added += 1
     db.commit()
-    return UploadSummary(
-        documents_created=0, sentences_created=0, entities_created=added,
-        entities_skipped_missing_offsets=skipped_entities,
-        skipped_entity_details=(skipped_details or [])[:50],
-    )
+    return UploadSummary(documents_created=0, chunks_created=0, entities_created=added)
 
 
 @router.get("/documents", response_model=list[DocumentSummaryOut])
@@ -160,12 +123,13 @@ def list_documents(
     db: Session = Depends(get_db),
 ):
     documents = db.query(Document).filter(Document.project_id == project_id).all()
-    result = []
-    for d in documents:
-        count = db.query(Sentence).filter(Sentence.document_id == d.id).count()
-        result.append(DocumentSummaryOut(id=d.id, doc_id_external=d.doc_id_external,
-                                         sentence_count=count, source=d.source))
-    return result
+    return [
+        DocumentSummaryOut(
+            id=d.id, doc_id_external=d.doc_id_external,
+            chunk_count=db.query(Chunk).filter(Chunk.document_id == d.id).count(),
+            source=d.source, cleaned_title=d.cleaned_title,
+        ) for d in documents
+    ]
 
 
 @router.get("/documents/{doc_id_external}", response_model=DocumentDetailOut)
@@ -177,56 +141,38 @@ def get_document(
 ):
     document = (
         db.query(Document)
-        .options(selectinload(Document.sentences).selectinload(Sentence.entities))
+        .options(selectinload(Document.chunks).selectinload(Chunk.entities))
         .filter(Document.project_id == project_id, Document.doc_id_external == doc_id_external)
         .first()
     )
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
-
-    # Attach each entity's current (latest) review, if any, so the
-    # frontend can show TP/FP status and who reviewed it without a
-    # second round-trip per entity.
-    all_entity_ids = [e.id for s in document.sentences for e in s.entities]
+    all_entity_ids = [e.id for chunk in document.chunks for e in chunk.entities]
     latest_reviews = get_latest_reviews_map(db, all_entity_ids)
-
     reviewer_ids = {r.reviewer_id for r in latest_reviews.values()}
     reviewer_names = {u.id: u.name for u in db.query(User).filter(User.id.in_(reviewer_ids)).all()} if reviewer_ids else {}
-
-    sentences_out = []
-    for s in document.sentences:
+    chunks_out = []
+    for chunk in sorted(document.chunks, key=lambda item: (item.position, item.chunk_id_external)):
         entities_out = []
-        for e in s.entities:
-            review = latest_reviews.get(e.id)
-            review_out = None
-            if review is not None:
-                review_out = ReviewOut(
-                    id=review.id,
-                    verdict=review.verdict,
-                    reviewer_id=review.reviewer_id,
-                    reviewer_name=reviewer_names.get(review.reviewer_id, "Unknown"),
-                    note=review.note,
-                    created_at=review.created_at,
-                )
-            entities_out.append(
-                EntityOut(
-                    id=e.id,
-                    text=e.text,
-                    label=e.label,
-                    start_char=e.start_char,
-                    end_char=e.end_char,
-                    source=e.source,
-                    current_review=review_out,
-                )
-            )
-        sentences_out.append(
-            SentenceOut(
-                id=s.id,
-                sentence_id_external=s.sentence_id_external,
-                text=s.text,
-                entities=entities_out,
-            )
-        )
-
-    return DocumentDetailOut(id=document.id, doc_id_external=document.doc_id_external,
-                             source=document.source, sentences=sentences_out)
+        for entity in chunk.entities:
+            review = latest_reviews.get(entity.id)
+            review_out = ReviewOut(
+                id=review.id, verdict=review.verdict, reviewer_id=review.reviewer_id,
+                reviewer_name=reviewer_names.get(review.reviewer_id, "Unknown"),
+                note=review.note, created_at=review.created_at,
+            ) if review is not None else None
+            entities_out.append(EntityOut(
+                id=entity.id, text=entity.text, label=entity.label,
+                start_char=entity.start_char, end_char=entity.end_char,
+                confidence_score=entity.confidence_score, source=entity.source,
+                current_review=review_out,
+            ))
+        chunks_out.append(ChunkOut(
+            id=chunk.id, chunk_id_external=chunk.chunk_id_external,
+            text=chunk.text, entities=entities_out,
+        ))
+    return DocumentDetailOut(
+        id=document.id, doc_id_external=document.doc_id_external,
+        source=document.source, cleaned_title=document.cleaned_title,
+        chunks=chunks_out,
+    )

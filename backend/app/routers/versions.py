@@ -38,7 +38,7 @@ def save_version(
     db: Session = Depends(get_db),
 ):
     """The 'Save' button: takes a full snapshot of the project's current
-    documents/sentences/entities/reviews right now. Any accepted member
+    documents/chunks/entities/reviews right now. Any accepted member
     can save a checkpoint — reverting to one is Owner-only, below."""
     version = create_version(db, project_id, current_user.id, payload.label)
     return _version_out(db, version)
@@ -100,7 +100,7 @@ def revert_version(
     return RevertResult(
         version_id=version.id,
         documents_restored=counts.documents,
-        sentences_restored=counts.sentences,
+        chunks_restored=counts.chunks,
         entities_restored=counts.entities,
         reviews_restored=counts.reviews,
     )

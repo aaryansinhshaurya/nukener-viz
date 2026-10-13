@@ -21,7 +21,7 @@ class VersionOut(BaseModel):
 class RevertResult(BaseModel):
     version_id: uuid.UUID
     documents_restored: int
-    sentences_restored: int
+    chunks_restored: int
     entities_restored: int
     reviews_restored: int
 

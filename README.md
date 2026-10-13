@@ -9,7 +9,15 @@ A collaborative application for checking named entity predictions. Reviewers mar
 
 ## Input
 
-Upload CSV or JSON rows with document_id, filename, source, cleaned_title, sentence_id, sentence, entities. The three metadata fields may be blank or omitted in JSON. Source, when present, appears quietly beside the document ID. Each entity needs text and label. start_char and end_char are optional: the importer locates text in the sentence, using the next unused occurrence when text repeats. Explicit offsets are zero-based and end_char is exclusive. An entity whose text cannot be found in its sentence is skipped and reported in the upload summary; valid entities still import. Explicit offsets that point to different text remain an error. Metadata must be consistent for every row of a document.
+Upload CSV rows with `source, document_id, cleaned_title, chunk_id, chunk_text, entities, triplets`, or JSON objects with the same fields. Each row is one chunk; input row order is preserved within each document. `entities` is a JSON array containing `entity_text`, `entity_class`, `entity_confidence_score`, `start_char`, and `end_char`. Offsets are zero-based and `end_char` is exclusive. The importer validates every entity span against its chunk text. Confidence is displayed with the entity and does not affect reviews or metrics. `triplets` is accepted but ignored for now.
+
+Before upload, add offsets to your model output:
+
+```powershell
+python scripts/add_entity_offsets.py predictions.csv predictions-with-offsets.csv
+```
+
+Use any working Python 3 interpreter. The script preserves the CSV columns, assigns repeated mentions to the next unused occurrence from left to right, and stops with a row-specific error if a mention cannot be located. Upload `predictions-with-offsets.csv`. If the same entity text appears more times than there are predictions, left-to-right assignment is a deterministic choice; inspect those rows if the model intended a later occurrence.
 
 ## Local backend
 
@@ -19,7 +27,7 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
 # Set DATABASE_URL and JWT_SECRET_KEY in .env.
-.venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\alembic.exe upgrade head
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
@@ -41,7 +49,7 @@ The Google Apps Script integration has been removed from the backend. Remove `AP
 
 ## Repairing entities in an existing project
 
-If a dataset was uploaded before text-only entities were supported, select that project in **Projects** and upload the original CSV or JSON again. The backend checks that the document IDs, sentence IDs, and sentence text match the stored dataset, then adds only missing predictions. It keeps existing reviews and does not duplicate entities on a repeat upload. A different dataset is rejected; create a new project for different text. After repairing, save a new version if you use checkpoints, since earlier versions may predate the added entities.
+Re-uploading the same chunk dataset adds only missing entity predictions and preserves existing reviews. A different set of documents or chunks is rejected; create a new project for different text. Existing sentence-based projects are retained by the database migration as chunks, and old saved versions remain inspectable and restorable.
 
 Roles belong to projects, not accounts. Creating a project makes the creator an owner. Owners can invite owners, reviewers, or viewers. Owners manage invitations, members, and deletion; owners and reviewers may review and save versions; viewers may inspect and export.
 
@@ -60,7 +68,7 @@ Create a Vercel project with **Root Directory** set to `frontend` and **Framewor
 ```powershell
 cd backend
 .venv\Scripts\python.exe -m unittest discover -s tests -v
-.venv\Scripts\python.exe -m alembic heads
+.venv\Scripts\alembic.exe heads
 cd ..
 node --check frontend/app.js
 ```

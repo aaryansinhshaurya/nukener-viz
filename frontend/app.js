@@ -9,11 +9,11 @@ let S = {
   meId: null, meName: "", meEmail: "",
   pid: null, pname: "", myRole: null, ownerId: null,
   projects: [],
-  documents: [],            // [{id, doc_id_external, sentence_count}]
+  documents: [],            // [{id, doc_id_external, chunk_count}]
   currentDoc: null,         // doc_id_external
-  docDetail: null,          // {id, doc_id_external, sentences:[...]}
-  sentenceIndex: new Map(), // sentence_id_external -> sentence obj (with entities)
-  entityIndex: new Map(),   // entity id -> {entity, sentenceIdExternal}
+  docDetail: null,          // {id, doc_id_external, chunks:[...]}
+  chunkIndex: new Map(), // chunk_id_external -> chunk obj (with entities)
+  entityIndex: new Map(),   // entity id -> {entity, chunkIdExternal}
   entityCounts: {}, labels: new Set(), activeLabels: new Set(), lStyle: {},
   openEntityId: null, saving: new Set(),
   locks: {},                // doc_id_external -> {locked_by, locked_by_name}
@@ -480,19 +480,13 @@ async function handleUpload(file) {
   form.append("file", file);
   try {
     const summary = await api(`/projects/${S.pid}/upload`, { method: "POST", body: form, isForm: true });
-    const repaired = summary.documents_created === 0 && summary.sentences_created === 0;
-    const skipped = summary.entities_skipped_missing_offsets || 0;
+    const repaired = summary.documents_created === 0 && summary.chunks_created === 0;
     setUploadStatus(repaired
-      ? `✅ ${summary.entities_created} missing entities added${skipped ? ` · ${skipped} unmatched predictions skipped` : ""}`
-      : `✅ ${summary.documents_created} documents · ${summary.sentences_created} sentences · ${summary.entities_created} entities loaded${skipped ? ` · ${skipped} unmatched predictions skipped` : ""}`);
+      ? `✅ ${summary.entities_created} missing entities added`
+      : `✅ ${summary.documents_created} documents · ${summary.chunks_created} chunks · ${summary.entities_created} entities loaded`);
     await openProject(S.pid, S.pname);
     const notices = [];
     if (repaired) notices.push(`${summary.entities_created} missing entities added to this project. Existing reviews were kept.`);
-    if (skipped) {
-      notices.push(`${skipped} predictions were skipped because their text does not appear in the sentence. The other entities were imported.`);
-      notices.push(...(summary.skipped_entity_details || []).slice(0, 8));
-      if (skipped > 8) notices.push(`...and ${skipped - 8} more.`);
-    }
     if (notices.length) alert(notices.join("\n"));
   } catch (e) { setUploadStatus(`❌ ${e.message}`, true); }
 }
@@ -521,7 +515,7 @@ async function openProject(pid, name = "") {
   clearTimeout(S.wsRetry);
   S.pid = pid; S.pname = name || S.pname || "Project";
   Object.assign(S, {
-    documents: [], currentDoc: null, docDetail: null, sentenceIndex: new Map(),
+    documents: [], currentDoc: null, docDetail: null, chunkIndex: new Map(),
     entityIndex: new Map(), entityCounts: {}, labels: new Set(), activeLabels: new Set(),
     lStyle: {}, openEntityId: null, locks: {}, versionPreview: null,
   });
@@ -560,7 +554,7 @@ async function openProject(pid, name = "") {
   if (S.documents.length) selectDoc(S.documents[0].doc_id_external);
   else {
     _qs("mainHeader").style.display = "none";
-    _qs("sentencePane").innerHTML = `<div class="empty-state">This project has no documents yet — upload a dataset from the ⊕ Projects menu.</div>`;
+    _qs("chunkPane").innerHTML = `<div class="empty-state">This project has no documents yet — upload a dataset from the ⊕ Projects menu.</div>`;
     _qs("welcomeState").style.display = "none";
   }
 }
@@ -576,7 +570,7 @@ function resetUI() {
   _qs("legendItems").innerHTML = "";
   _qs("legendCard").style.display = "none";
   _qs("mainHeader").style.display = "none";
-  _qs("sentencePane").innerHTML = "";
+  _qs("chunkPane").innerHTML = "";
   _qs("metricsPanel").innerHTML = "";
   _qs("teamPanel").innerHTML = "";
   _qs("versionsPanel").innerHTML = "";
@@ -584,9 +578,9 @@ function resetUI() {
 }
 
 function updateStats() {
-  const totalSent = S.documents.reduce((n, d) => n + d.sentence_count, 0);
+  const totalChunks = S.documents.reduce((n, d) => n + d.chunk_count, 0);
   _qs("sDoc").textContent = `${S.documents.length} docs`;
-  _qs("sSent").textContent = `${totalSent} sentences`;
+  _qs("sChunk").textContent = `${totalChunks} chunks`;
   const totalEnt = Object.values(S.entityCounts).reduce((a,b)=>a+b,0);
   _qs("sEnt").textContent = `${totalEnt} entities`;
   _qs("sType").textContent = `${S.labels.size} types`;
@@ -601,9 +595,9 @@ function buildDocList() {
     const glyph = lock ? (lockedByOther ? `<span class="lock-glyph" title="Locked by ${escA(lock.locked_by_name)}">🔒</span>` : `<span class="lock-glyph" title="Locked by you">🔓</span>`) : "";
     return `<div class="doc-item ${lockedByOther?'locked-other':''}" data-doc="${escA(d.doc_id_external)}">
       <div class="doc-pip"></div>
-      <div class="doc-name" title="${escA(d.doc_id_external)}">${esc(d.doc_id_external)}</div>
+      <div class="doc-name" title="${escA(d.cleaned_title || d.doc_id_external)}">${esc(d.cleaned_title || d.doc_id_external)}</div>
       ${glyph}
-      <div class="doc-count">${d.sentence_count}</div>
+      <div class="doc-count">${d.chunk_count}</div>
     </div>`;
   }).join("");
   _qs("docList").onclick = e => {
@@ -626,19 +620,19 @@ async function selectDoc(docExternal) {
 
   _qs("mainHeader").style.display = "flex";
   _qs("welcomeState").style.display = "none";
-  _qs("sentencePane").innerHTML = `<div class="empty-state">⏳ Loading document…</div>`;
+  _qs("chunkPane").innerHTML = `<div class="empty-state">⏳ Loading document…</div>`;
   showTab("annotate");
 
   try {
     S.docDetail = await api(`/projects/${S.pid}/documents/${encodeURIComponent(docExternal)}`);
   } catch (e) {
-    _qs("sentencePane").innerHTML = `<div class="empty-state" style="color:#e5484d">⚠️ ${esc(e.message)}</div>`;
+    _qs("chunkPane").innerHTML = `<div class="empty-state" style="color:#e5484d">⚠️ ${esc(e.message)}</div>`;
     return;
   }
 
   indexDocDetail();
   updateDocHeader();
-  renderSentences();
+  renderChunks();
   buildLegend();
   updateStats();
 
@@ -661,7 +655,7 @@ async function lockCurrentDoc() {
   } catch (e) {
     // Someone else already holds it — fine, just stay read-only for this doc
   }
-  buildDocList(); updateDocHeader(); renderSentences();
+  buildDocList(); updateDocHeader(); renderChunks();
 }
 
 async function unlockDoc(docExternal) {
@@ -687,7 +681,7 @@ async function manualUnlockClick() {
   try {
     await api(`/projects/${S.pid}/documents/${encodeURIComponent(S.currentDoc)}/unlock`, { method: "POST" });
     delete S.locks[S.currentDoc];
-    buildDocList(); updateDocHeader(); renderSentences();
+    buildDocList(); updateDocHeader(); renderChunks();
   } catch (e) {
     alert("Could not unlock: " + e.message);
   }
@@ -703,11 +697,10 @@ window.addEventListener("pagehide", () => {
 function updateDocHeader() {
   const d = S.docDetail;
   if (!d) return;
-  const entCount = d.sentences.reduce((n,s)=>n+s.entities.filter(e=>e.source==="model").length, 0);
-  const reviewedCount = d.sentences.reduce((n,s)=>n+s.entities.filter(e=>e.source==="model" && e.current_review).length, 0);
-  _qs("mainDocTitle").textContent = d.doc_id_external;
-  if (d.source) _qs("mainDocTitle").innerHTML = `${esc(d.doc_id_external)} <span class="source-note">· ${esc(d.source)}</span>`;
-  _qs("mainDocBadge").textContent = `${d.sentences.length} sentences · ${entCount} entities`;
+  const entCount = d.chunks.reduce((n,s)=>n+s.entities.filter(e=>e.source==="model").length, 0);
+  const reviewedCount = d.chunks.reduce((n,s)=>n+s.entities.filter(e=>e.source==="model" && e.current_review).length, 0);
+  _qs("mainDocTitle").innerHTML = `${esc(d.cleaned_title || d.doc_id_external)} <span class="source-note">· ${esc(d.doc_id_external)}${d.source ? ` · ${esc(d.source)}` : ""}</span>`;
+  _qs("mainDocBadge").textContent = `${d.chunks.length} chunks · ${entCount} entities`;
   _qs("progressChip").textContent = `${reviewedCount}/${entCount} reviewed`;
 
   const lock = S.locks[S.currentDoc];
@@ -732,13 +725,13 @@ function updateDocHeader() {
 }
 
 function indexDocDetail() {
-  S.sentenceIndex = new Map();
+  S.chunkIndex = new Map();
   S.entityIndex = new Map();
   S.entityCounts = {}; S.labels = new Set();
-  for (const sent of S.docDetail.sentences) {
-    S.sentenceIndex.set(sent.sentence_id_external, sent);
+  for (const sent of S.docDetail.chunks) {
+    S.chunkIndex.set(sent.chunk_id_external, sent);
     for (const ent of sent.entities.filter(e => e.source === "model")) {
-      S.entityIndex.set(ent.id, { entity: ent, sentenceIdExternal: sent.sentence_id_external });
+      S.entityIndex.set(ent.id, { entity: ent, chunkIdExternal: sent.chunk_id_external });
       S.entityCounts[ent.label] = (S.entityCounts[ent.label]||0) + 1;
       S.labels.add(ent.label);
       if (!S.activeLabels.has(ent.label)) S.activeLabels.add(ent.label);
@@ -769,7 +762,7 @@ function connectLockSocket() {
       if (S.docDetail && msg.document_id === S.docDetail.id) {
         api(`/projects/${S.pid}/documents/${encodeURIComponent(S.currentDoc)}`).then(detail => {
           if (S.currentDoc !== detail.doc_id_external) return;
-          S.docDetail = detail; indexDocDetail(); renderSentences(); updateDocHeader();
+          S.docDetail = detail; indexDocDetail(); renderChunks(); updateDocHeader();
           if (S.tab === "metrics") loadMetrics();
         }).catch(() => {});
       }
@@ -781,19 +774,19 @@ function connectLockSocket() {
       delete S.locks[msg.doc_id_external];
     } else return;
     buildDocList();
-    if (msg.doc_id_external === S.currentDoc) { updateDocHeader(); renderSentences(); }
+    if (msg.doc_id_external === S.currentDoc) { updateDocHeader(); renderChunks(); }
   };
 }
 
 /* ══════════════════════════════════════════════════════════
-   Sentence / entity rendering
+   Chunk / entity rendering
    ══════════════════════════════════════════════════════════ */
-function renderSentences() {
+function renderChunks() {
   const editable = canEditCurrentDoc();
-  _qs("sentencePane").innerHTML = S.docDetail.sentences.map(sent => `
+  _qs("chunkPane").innerHTML = S.docDetail.chunks.map(sent => `
     <div class="sent-card">
-      <div class="sent-meta">${esc(S.docDetail.doc_id_external)} · ${esc(sent.sentence_id_external)}</div>
-      <div class="sent-text" data-sent="${escA(sent.sentence_id_external)}" data-editable="${editable}">${buildSentHTML(sent)}</div>
+      <div class="sent-meta">${esc(S.docDetail.doc_id_external)} · ${esc(sent.chunk_id_external)}</div>
+      <div class="sent-text" data-sent="${escA(sent.chunk_id_external)}" data-editable="${editable}">${buildSentHTML(sent)}</div>
     </div>`).join("");
   _qs("mainBody").scrollTop = 0;
   applyVisibility();
@@ -842,8 +835,10 @@ function buildEntitySpan(ent) {
   const eidJs = escJ(ent.id);
 
   const reviewer = ent.current_review ? ` · last: ${esc(ent.current_review.reviewer_name)}` : "";
+  const confidence = ent.confidence_score == null ? "" : `<span class="ent-confidence" title="Model confidence score">Confidence ${esc(ent.confidence_score)}</span>`;
   const bar = `<span class="ent-bar" onclick="event.stopPropagation()">
-      <span class="ent-label-tip">${esc(ent.label)}${reviewer}</span>
+      <span class="ent-label-tip" title="${escA(ent.label)}${escA(reviewer)}">${esc(ent.label)}${reviewer}</span>
+      ${confidence}
       <button class="ent-btn ent-btn-tp ${verdict==='tp'?'ent-active-tp':''}" ${dis||!editable?"disabled":""} onclick="setVerdict('${eidJs}','TP',event)">TP</button>
       <button class="ent-btn ent-btn-fp ${verdict==='fp'?'ent-active-fp':''}" ${dis||!editable?"disabled":""} onclick="setVerdict('${eidJs}','FP',event)">FP</button>
     </span>`;
@@ -926,7 +921,7 @@ function applyVisibility() {
 function showTab(tab) {
   S.tab = tab;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
-  _qs("sentencePane").style.display  = tab==="annotate" ? "" : "none";
+  _qs("chunkPane").style.display  = tab==="annotate" ? "" : "none";
   _qs("metricsPanel").style.display  = tab==="metrics"  ? "" : "none";
   _qs("teamPanel").style.display     = tab==="team"     ? "" : "none";
   _qs("versionsPanel").style.display = tab==="versions" ? "" : "none";
@@ -1149,10 +1144,10 @@ async function inspectVersion(versionId) {
     const data = await api(`/projects/${S.pid}/versions/${versionId}`);
     S.inspectedSnapshot = data.snapshot;
     const docs = data.snapshot.documents || [];
-    const sentenceCount = docs.reduce((total, doc) => total + doc.sentences.length, 0);
-    const entityCount = docs.reduce((total, doc) => total + doc.sentences.reduce((n, sentence) => n + sentence.entities.length, 0), 0);
+    const chunkCount = docs.reduce((total, doc) => total + (doc.chunks || doc.sentences || []).length, 0);
+    const entityCount = docs.reduce((total, doc) => total + (doc.chunks || doc.sentences || []).reduce((n, chunk) => n + chunk.entities.length, 0), 0);
     panel.innerHTML = `<div class="version-preview"><h4>${esc(data.version.label)}</h4>
-      <p>Saved by ${esc(data.version.created_by_name)} on ${new Date(data.version.created_at).toLocaleString()} · ${docs.length} documents · ${sentenceCount} sentences · ${entityCount} entities</p>
+      <p>Saved by ${esc(data.version.created_by_name)} on ${new Date(data.version.created_at).toLocaleString()} · ${docs.length} documents · ${chunkCount} chunks · ${entityCount} entities</p>
       ${docs.length ? `<label class="field-label" for="snapshotDocument">Document</label><select class="field" id="snapshotDocument" onchange="showVersionDocument(Number(this.value))">${docs.map((doc, index) => `<option value="${index}">${esc(doc.doc_id_external)}</option>`).join("")}</select><div id="snapshotDocumentDetail"></div>` : `<p>This snapshot has no documents.</p>`}
     </div>`;
     if (docs.length) showVersionDocument(0);
@@ -1164,8 +1159,8 @@ function showVersionDocument(index) {
   const panel = _qs("snapshotDocumentDetail");
   if (!doc || !panel) return;
   panel.innerHTML = `${doc.source ? `<p class="source-note">Source: ${esc(doc.source)}</p>` : ""}` +
-    doc.sentences.map(sentence => `<div class="sent-card"><div class="sent-meta">${esc(sentence.sentence_id_external)}</div><div class="sent-text">${esc(sentence.text)}</div>
-      <div class="snapshot-entities">${sentence.entities.map(entity => {
+    (doc.chunks || doc.sentences || []).map(chunk => `<div class="sent-card"><div class="sent-meta">${esc(chunk.chunk_id_external || chunk.sentence_id_external)}</div><div class="sent-text">${esc(chunk.text)}</div>
+      <div class="snapshot-entities">${chunk.entities.map(entity => {
         const reviews = entity.reviews || [];
         const latest = reviews.length ? [...reviews].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)).at(-1) : null;
         return `<span class="snapshot-entity">${esc(entity.text)} · ${esc(entity.label)} · ${esc(latest?.verdict || "unreviewed")}</span>`;
@@ -1196,7 +1191,7 @@ async function revertVersion(versionId, label) {
   if (!confirm(`Revert the project to "${label}"? This replaces all current documents, entities, and review verdicts.`)) return;
   try {
     const result = await api(`/projects/${S.pid}/versions/${versionId}/revert`, { method: "POST", body:{expected_current_hash:S.versionPreview.hash} });
-    alert(`Reverted: ${result.documents_restored} documents, ${result.sentences_restored} sentences, ${result.entities_restored} entities, ${result.reviews_restored} reviews restored.`);
+    alert(`Reverted: ${result.documents_restored} documents, ${result.chunks_restored} chunks, ${result.entities_restored} entities, ${result.reviews_restored} reviews restored.`);
     openProject(S.pid, S.pname);
   } catch (e) { alert("Could not revert: " + e.message); }
 }

@@ -3,26 +3,26 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session, selectinload
-from app.models.document import Document, Sentence, Entity, EntitySource
+from app.models.document import Document, Chunk, Entity, EntitySource
 from app.models.review import Review, ReviewVerdict
 from app.models.version import ProjectVersion
 
 
 def _serialize_project(db: Session, project_id: uuid.UUID) -> dict:
-    """Walks the full Document -> Sentence -> Entity -> Review tree for a
+    """Walks the full Document -> Chunk -> Entity -> Review tree for a
     project and serializes it to plain JSON. This blob — not a diff — is
     what's stored per version, so revert is always 'replace current rows
     with this blob' rather than replaying a chain of patches."""
     documents = (
         db.query(Document)
-        .options(selectinload(Document.sentences).selectinload(Sentence.entities).selectinload(Entity.reviews))
+        .options(selectinload(Document.chunks).selectinload(Chunk.entities).selectinload(Entity.reviews))
         .filter(Document.project_id == project_id)
         .all()
     )
     doc_list = []
     for d in sorted(documents, key=lambda item: item.doc_id_external):
-        sent_list = []
-        for s in sorted(d.sentences, key=lambda item: item.sentence_id_external):
+        chunk_list = []
+        for s in sorted(d.chunks, key=lambda item: (item.position, item.chunk_id_external)):
             ent_list = []
             for e in sorted(s.entities, key=lambda item: (item.start_char, item.end_char, str(item.id))):
                 reviews = [
@@ -41,12 +41,14 @@ def _serialize_project(db: Session, project_id: uuid.UUID) -> dict:
                     "label": e.label,
                     "start_char": e.start_char,
                     "end_char": e.end_char,
+                    "confidence_score": e.confidence_score,
                     "source": e.source.value,
                     "reviews": reviews,
                 })
-            sent_list.append({
+            chunk_list.append({
                 "id": str(s.id),
-                "sentence_id_external": s.sentence_id_external,
+                "chunk_id_external": s.chunk_id_external,
+                "position": s.position,
                 "text": s.text,
                 "entities": ent_list,
             })
@@ -56,7 +58,7 @@ def _serialize_project(db: Session, project_id: uuid.UUID) -> dict:
             "filename": d.filename,
             "source": d.source,
             "cleaned_title": d.cleaned_title,
-            "sentences": sent_list,
+            "chunks": chunk_list,
         })
     return {"documents": doc_list}
 
@@ -89,15 +91,15 @@ def compare_snapshots(before: dict, after: dict) -> dict:
     def index(snapshot: dict) -> dict[str, dict]:
         result = {}
         for document in snapshot.get("documents", []):
-            for sentence in document.get("sentences", []):
-                for entity in sentence.get("entities", []):
+            for chunk in document.get("chunks", document.get("sentences", [])):
+                for entity in chunk.get("entities", []):
                     if entity.get("source") != "model":
                         continue
                     reviews = entity.get("reviews", [])
                     latest = max(reviews, key=lambda r: (r["created_at"], r["id"])) if reviews else None
                     result[entity["id"]] = {
                         "document_id": document["doc_id_external"],
-                        "sentence_id": sentence["sentence_id_external"],
+                        "chunk_id": chunk.get("chunk_id_external", chunk.get("sentence_id_external")),
                         "text": entity["text"], "label": entity["label"],
                         "verdict": latest["verdict"] if latest else None,
                     }
@@ -110,7 +112,7 @@ def compare_snapshots(before: dict, after: dict) -> dict:
         if previous == current:
             continue
         item = current or previous
-        changes.append({"entity_id": entity_id, **{k: item[k] for k in ("document_id", "sentence_id", "text", "label")},
+        changes.append({"entity_id": entity_id, **{k: item[k] for k in ("document_id", "chunk_id", "text", "label")},
                         "before": previous["verdict"] if previous else None,
                         "after": current["verdict"] if current else None,
                         "kind": "added" if previous is None else "removed" if current is None else "changed"})
@@ -128,13 +130,13 @@ def snapshot_hash(snapshot: dict) -> str:
 class RevertCounts:
     def __init__(self):
         self.documents = 0
-        self.sentences = 0
+        self.chunks = 0
         self.entities = 0
         self.reviews = 0
 
 
 def revert_to_version(db: Session, project_id: uuid.UUID, version: ProjectVersion) -> RevertCounts:
-    """Deletes every current Document/Sentence/Entity/Review row for the
+    """Deletes every current Document/Chunk/Entity/Review row for the
     project and rebuilds them exactly from the snapshot, reusing the
     original UUIDs so anything that cached an id (e.g. an open browser
     tab) doesn't silently point at nothing. This is a full replace, not a
@@ -143,7 +145,7 @@ def revert_to_version(db: Session, project_id: uuid.UUID, version: ProjectVersio
 
     current_docs = db.query(Document).filter(Document.project_id == project_id).all()
     for d in current_docs:
-        db.delete(d)  # cascades to sentences -> entities -> reviews
+        db.delete(d)  # cascades to chunks -> entities -> reviews
     db.flush()
 
     for doc_blob in version.snapshot.get("documents", []):
@@ -159,25 +161,27 @@ def revert_to_version(db: Session, project_id: uuid.UUID, version: ProjectVersio
         db.flush()
         counts.documents += 1
 
-        for sent_blob in doc_blob.get("sentences", []):
-            sentence = Sentence(
-                id=uuid.UUID(sent_blob["id"]),
+        for position, chunk_blob in enumerate(doc_blob.get("chunks", doc_blob.get("sentences", []))):
+            chunk = Chunk(
+                id=uuid.UUID(chunk_blob["id"]),
                 document_id=document.id,
-                sentence_id_external=sent_blob["sentence_id_external"],
-                text=sent_blob["text"],
+                chunk_id_external=chunk_blob.get("chunk_id_external", chunk_blob.get("sentence_id_external")),
+                position=chunk_blob.get("position", position),
+                text=chunk_blob["text"],
             )
-            db.add(sentence)
+            db.add(chunk)
             db.flush()
-            counts.sentences += 1
+            counts.chunks += 1
 
-            for ent_blob in sent_blob.get("entities", []):
+            for ent_blob in chunk_blob.get("entities", []):
                 entity = Entity(
                     id=uuid.UUID(ent_blob["id"]),
-                    sentence_id=sentence.id,
+                    chunk_id=chunk.id,
                     text=ent_blob["text"],
                     label=ent_blob["label"],
                     start_char=ent_blob["start_char"],
                     end_char=ent_blob["end_char"],
+                    confidence_score=ent_blob.get("confidence_score"),
                     source=EntitySource(ent_blob["source"]),
                 )
                 db.add(entity)
