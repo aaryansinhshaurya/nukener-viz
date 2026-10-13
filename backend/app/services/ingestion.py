@@ -4,9 +4,11 @@ import csv
 import ast
 import io
 import json
+import re
 from typing import List
 
 from app.schemas.document import ChunkIn
+from app.services.offset_matching import enrich, filter_uploadable
 
 
 class IngestionError(Exception):
@@ -73,6 +75,31 @@ def parse_json(file_bytes: bytes) -> List[ChunkIn]:
     return chunks
 
 
+def align_chunks(chunks: List[ChunkIn]) -> tuple[List[ChunkIn], int]:
+    """Apply the CLI offset matcher, then omit predictions with no valid highlight."""
+    rows = [chunk.model_dump() for chunk in chunks]
+    for row in rows:
+        text = row["chunk_text"]
+        occupied = []
+        for entity in row["entities"]:
+            start, end = entity.get("start_char"), entity.get("end_char")
+            if start is None and end is None:
+                continue
+            if (type(start) is not int or type(end) is not int
+                    or not 0 <= start < end <= len(text)
+                    or text[start:end] != entity["entity_text"]
+                    or any(start < used_end and used_start < end for used_start, used_end in occupied)):
+                entity["start_char"] = entity["end_char"] = None
+            else:
+                occupied.append((start, end))
+    try:
+        enrich(rows)
+        skipped = filter_uploadable(rows)
+        return [ChunkIn(**row) for row in rows], skipped
+    except (ValueError, TypeError) as exc:
+        raise IngestionError([f"Could not align entity offsets: {exc}"]) from exc
+
+
 def validate_chunks(chunks: List[ChunkIn]) -> None:
     errors = []
     if not chunks:
@@ -92,10 +119,30 @@ def validate_chunks(chunks: List[ChunkIn]) -> None:
         spans = []
         for entity in chunk.entities:
             start, end = entity.start_char, entity.end_char
+            if start is None:
+                continue
             if chunk.chunk_text[start:end] != entity.entity_text:
                 errors.append(f"Chunk {chunk.chunk_id}: offsets [{start}:{end}] do not match {entity.entity_text!r}")
             if any(start < used_end and used_start < end for used_start, used_end in spans):
                 errors.append(f"Chunk {chunk.chunk_id}: entity spans overlap")
             spans.append((start, end))
+        for entity in chunk.entities:
+            if entity.start_char is not None:
+                continue
+            found = None
+            for flags in (0, re.IGNORECASE):
+                for match in re.finditer(re.escape(entity.entity_text), chunk.chunk_text, flags):
+                    start, end = match.span()
+                    if end - start != len(entity.entity_text):
+                        continue
+                    if all(end <= used_start or start >= used_end for used_start, used_end in spans):
+                        found = (start, end)
+                        break
+                if found is not None:
+                    break
+            if found is not None:
+                entity.start_char, entity.end_char = found
+                entity.entity_text = chunk.chunk_text[found[0]:found[1]]
+                spans.append(found)
     if errors:
         raise IngestionError(errors)

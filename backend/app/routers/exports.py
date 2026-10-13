@@ -42,7 +42,10 @@ def export_reviews(project_id: uuid.UUID, format: str = "csv",
     rows = []
     for doc in documents:
         for chunk in sorted(doc.chunks, key=lambda s: (s.position, s.chunk_id_external)):
-            for entity in sorted(chunk.entities, key=lambda e: (e.start_char, e.end_char)):
+            for entity in sorted(chunk.entities, key=lambda e: (
+                e.start_char if e.start_char is not None else float("inf"),
+                e.end_char if e.end_char is not None else float("inf"),
+            )):
                 if entity.source != EntitySource.MODEL:
                     continue
                 review = latest.get(entity.id)

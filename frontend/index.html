@@ -113,7 +113,7 @@
         <input type="file" id="uploadFileInput" accept=".csv,.json" style="display:none">
         <div class="upload-icon">📂</div>
         <div class="upload-label">Click to upload or drag &amp; drop</div>
-        <div class="upload-sub">CSV or JSON — document_id, source, cleaned_title, chunk_id, chunk_text, entities, triplets. Run the offset script before upload.</div>
+        <div class="upload-sub">CSV or JSON — document_id, source, cleaned_title, chunk_id, chunk_text, entities, triplets. Offsets are added during upload; predictions without a valid highlight are skipped.</div>
       </label>
       <div id="uploadStatus" class="status-line"></div>
     </div>
@@ -217,8 +217,8 @@
             <p>Create or open a project using the <strong>⊕ Projects</strong> button above.</p>
             <div class="format-hint">
               <div class="hint-block"><strong>CSV columns</strong><br>source, document_id, cleaned_title, chunk_id, chunk_text, entities, triplets<br><code>entities: [{"entity_text":"...","entity_class":"...","start_char":0,"end_char":3}]</code></div>
-              <div class="hint-block">Run <code>scripts/add_entity_offsets.py</code> on your results, then upload its output. Offsets are checked against each chunk. Triplets are ignored in this phase.</div>
-              <div class="hint-block"><strong>JSON</strong><br>a list of chunk objects with the same fields and enriched entities.</div>
+              <div class="hint-block">The backend locates entities during upload. Only predictions with valid, non-overlapping spans are loaded and highlighted. Triplets are ignored in this phase.</div>
+              <div class="hint-block"><strong>JSON</strong><br>Upload the original list of chunk objects directly; running an offset script first is optional.</div>
             </div>
           </div>
 
@@ -232,6 +232,6 @@
   </div>
 </div>
 
-<script src="app.js?v=20261013-chunk-entities"></script>
+<script src="app.js?v=20261013-auto-offsets"></script>
 </body>
 </html>

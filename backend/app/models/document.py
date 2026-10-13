@@ -57,8 +57,8 @@ class Entity(Base):
     text: Mapped[str] = mapped_column(String(500), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     # Character offsets into the parent chunk's text.
-    start_char: Mapped[int] = mapped_column(Integer, nullable=False)
-    end_char: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
     confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[EntitySource] = mapped_column(Enum(EntitySource), default=EntitySource.MODEL, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

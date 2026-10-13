@@ -9,15 +9,9 @@ A collaborative application for checking named entity predictions. Reviewers mar
 
 ## Input
 
-Upload CSV rows with `source, document_id, cleaned_title, chunk_id, chunk_text, entities, triplets`, or JSON objects with the same fields. Each row is one chunk; input row order is preserved within each document. `entities` is a JSON array containing `entity_text`, `entity_class`, `entity_confidence_score`, `start_char`, and `end_char`. Offsets are zero-based and `end_char` is exclusive. The importer validates every entity span against its chunk text. Confidence is displayed with the entity and does not affect reviews or metrics. `triplets` is accepted but ignored for now.
+Upload CSV rows with `source, document_id, cleaned_title, chunk_id, chunk_text, entities, triplets`, or JSON objects with the same fields. Each row is one chunk; input row order is preserved within each document. `entities` is a JSON array containing `entity_text`, `entity_class`, and optionally `entity_confidence_score`, `start_char`, and `end_char`. Offsets are zero-based and `end_char` is exclusive. During upload, the backend locates entities in chunk text, including LaTeX and OCR spacing variants. It loads and highlights only entities with valid, non-overlapping spans; the upload response reports how many predictions were skipped. Confidence is displayed with the entity and does not affect reviews or metrics. `triplets` is accepted but ignored for now.
 
-Before upload, add offsets to your model output:
-
-```powershell
-python scripts/add_entity_offsets.py predictions.csv predictions-with-offsets.csv
-```
-
-Use any working Python 3 interpreter. The script preserves the CSV columns, assigns repeated mentions to the next unused occurrence from left to right, and stops with a row-specific error if a mention cannot be located. Upload `predictions-with-offsets.csv`. If the same entity text appears more times than there are predictions, left-to-right assignment is a deterministic choice; inspect those rows if the model intended a later occurrence.
+Upload the original JSON or CSV file directly; no preprocessing script is required. Repeated mentions are assigned to distinct occurrences where possible; inspect ambiguous cases if the model intended a later occurrence.
 
 ## Local backend
 

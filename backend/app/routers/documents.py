@@ -8,7 +8,7 @@ from app.models.user import User
 from app.schemas.document import UploadSummary, DocumentSummaryOut, DocumentDetailOut, ChunkOut, EntityOut, ChunkIn
 from app.schemas.review import ReviewOut
 from app.auth.dependencies import require_project_role
-from app.services.ingestion import parse_csv, parse_json, validate_chunks, IngestionError
+from app.services.ingestion import parse_csv, parse_json, align_chunks, validate_chunks, IngestionError
 from app.services.reviews import get_latest_reviews_map
 from app.config import settings
 
@@ -35,6 +35,7 @@ def upload_dataset(
             chunks = parse_csv(raw)
         else:
             raise IngestionError(["Unsupported file type — upload a .csv or .json file"])
+        chunks, entities_skipped = align_chunks(chunks)
         validate_chunks(chunks)
     except IngestionError as exc:
         raise HTTPException(status_code=422, detail={"errors": exc.errors}) from exc
@@ -46,7 +47,7 @@ def upload_dataset(
         .all()
     )
     if existing_documents:
-        return _add_missing_entities(db, existing_documents, chunks)
+        return _add_missing_entities(db, existing_documents, chunks, entities_skipped)
 
     doc_map: dict[str, Document] = {}
     entities_created = 0
@@ -79,11 +80,11 @@ def upload_dataset(
     db.commit()
     return UploadSummary(
         documents_created=len(doc_map), chunks_created=len(chunks),
-        entities_created=entities_created,
+        entities_created=entities_created, entities_skipped=entities_skipped,
     )
 
 
-def _add_missing_entities(db: Session, documents: list[Document], chunks: list[ChunkIn]) -> UploadSummary:
+def _add_missing_entities(db: Session, documents: list[Document], chunks: list[ChunkIn], entities_skipped: int) -> UploadSummary:
     """Preserve reviews on repeat upload of an identical chunk dataset."""
     existing = {
         (document.doc_id_external, chunk.chunk_id_external): chunk
@@ -99,9 +100,9 @@ def _add_missing_entities(db: Session, documents: list[Document], chunks: list[C
     added = 0
     for item in chunks:
         stored = existing[(item.document_id, item.chunk_id)]
-        known = {(e.start_char, e.end_char, e.label) for e in stored.entities if e.source == EntitySource.MODEL}
+        known = {(e.start_char, e.end_char, e.text, e.label) for e in stored.entities if e.source == EntitySource.MODEL}
         for prediction in item.entities:
-            key = (prediction.start_char, prediction.end_char, prediction.entity_class)
+            key = (prediction.start_char, prediction.end_char, prediction.entity_text, prediction.entity_class)
             if key in known:
                 continue
             db.add(Entity(
@@ -113,7 +114,10 @@ def _add_missing_entities(db: Session, documents: list[Document], chunks: list[C
             known.add(key)
             added += 1
     db.commit()
-    return UploadSummary(documents_created=0, chunks_created=0, entities_created=added)
+    return UploadSummary(
+        documents_created=0, chunks_created=0, entities_created=added,
+        entities_skipped=entities_skipped,
+    )
 
 
 @router.get("/documents", response_model=list[DocumentSummaryOut])

@@ -481,12 +481,14 @@ async function handleUpload(file) {
   try {
     const summary = await api(`/projects/${S.pid}/upload`, { method: "POST", body: form, isForm: true });
     const repaired = summary.documents_created === 0 && summary.chunks_created === 0;
+    const skipped = summary.entities_skipped || 0;
     setUploadStatus(repaired
       ? `✅ ${summary.entities_created} missing entities added`
-      : `✅ ${summary.documents_created} documents · ${summary.chunks_created} chunks · ${summary.entities_created} entities loaded`);
+      : `✅ ${summary.documents_created} documents · ${summary.chunks_created} chunks · ${summary.entities_created} entities loaded${skipped ? ` · ${skipped} skipped` : ""}`);
     await openProject(S.pid, S.pname);
     const notices = [];
     if (repaired) notices.push(`${summary.entities_created} missing entities added to this project. Existing reviews were kept.`);
+    if (summary.entities_skipped) notices.push(`${summary.entities_skipped} predictions had no valid text span and were skipped. Only predictions that can be highlighted were loaded.`);
     if (notices.length) alert(notices.join("\n"));
   } catch (e) { setUploadStatus(`❌ ${e.message}`, true); }
 }
@@ -783,18 +785,23 @@ function connectLockSocket() {
    ══════════════════════════════════════════════════════════ */
 function renderChunks() {
   const editable = canEditCurrentDoc();
-  _qs("chunkPane").innerHTML = S.docDetail.chunks.map(sent => `
+  _qs("chunkPane").innerHTML = S.docDetail.chunks.map(sent => {
+    const unlocated = sent.entities.filter(e => e.source === "model" && (e.start_char == null || e.end_char == null));
+    return `
     <div class="sent-card">
       <div class="sent-meta">${esc(S.docDetail.doc_id_external)} · ${esc(sent.chunk_id_external)}</div>
       <div class="sent-text" data-sent="${escA(sent.chunk_id_external)}" data-editable="${editable}">${buildSentHTML(sent)}</div>
-    </div>`).join("");
+      ${unlocated.length ? `<div class="unlocated-list"><div class="unlocated-heading">Predictions without a text highlight</div>
+        ${unlocated.map(ent => `<div class="unlocated-row" data-type="${escA(ent.label)}">${buildEntitySpan(ent)}<span class="unlocated-class">${esc(ent.label)}</span>${ent.confidence_score == null ? "" : `<span class="unlocated-score">Confidence ${esc(ent.confidence_score)}</span>`}</div>`).join("")}</div>` : ""}
+    </div>`;
+  }).join("");
   _qs("mainBody").scrollTop = 0;
   applyVisibility();
 }
 
 function buildSentHTML(sent) {
   const text = sent.text || "";
-  const ents = sent.entities.filter(e => e.source === "model").sort((a,b)=>a.start_char-b.start_char);
+  const ents = sent.entities.filter(e => e.source === "model" && Number.isInteger(e.start_char) && Number.isInteger(e.end_char)).sort((a,b)=>a.start_char-b.start_char);
   if (!ents.length) return esc(text);
   let html = "", cur = 0;
   for (const ent of ents) {
@@ -912,6 +919,7 @@ function selectAllLabels() { S.activeLabels = new Set(S.labels); applyVisibility
 function deselectAllLabels() { S.activeLabels.clear(); applyVisibility(); }
 function applyVisibility() {
   document.querySelectorAll(".entity").forEach(el => { el.classList.toggle("entity-hidden", !S.activeLabels.has(el.dataset.type)); });
+  document.querySelectorAll(".unlocated-row").forEach(el => { el.classList.toggle("entity-hidden", !S.activeLabels.has(el.dataset.type)); });
   document.querySelectorAll(".legend-tag").forEach(el => { el.classList.toggle("inactive", !S.activeLabels.has(el.dataset.type)); });
 }
 

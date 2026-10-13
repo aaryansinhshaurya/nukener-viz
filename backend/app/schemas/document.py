@@ -9,12 +9,14 @@ class EntityIn(BaseModel):
     entity_text: str
     entity_class: str
     entity_confidence_score: float | None = None
-    start_char: int
-    end_char: int
+    start_char: int | None = None
+    end_char: int | None = None
 
     @model_validator(mode="after")
     def check_offsets(self):
-        if self.start_char < 0 or self.end_char <= self.start_char:
+        if (self.start_char is None) != (self.end_char is None):
+            raise ValueError(f"supply both offsets or neither for entity {self.entity_text!r}")
+        if self.start_char is not None and (self.start_char < 0 or self.end_char <= self.start_char):
             raise ValueError(f"invalid offsets for entity {self.entity_text!r}")
         if not self.entity_text or not self.entity_class:
             raise ValueError("entity_text and entity_class cannot be empty")
@@ -39,6 +41,8 @@ class UploadSummary(BaseModel):
     documents_created: int
     chunks_created: int
     entities_created: int
+    entities_without_offsets: int = 0
+    entities_skipped: int = 0
 
 
 class EntityOut(BaseModel):
@@ -46,8 +50,8 @@ class EntityOut(BaseModel):
     id: uuid.UUID
     text: str
     label: str
-    start_char: int
-    end_char: int
+    start_char: int | None
+    end_char: int | None
     confidence_score: float | None = None
     source: EntitySource
     current_review: Optional[ReviewOut] = None

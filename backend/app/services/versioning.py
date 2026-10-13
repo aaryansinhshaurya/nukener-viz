@@ -24,7 +24,11 @@ def _serialize_project(db: Session, project_id: uuid.UUID) -> dict:
         chunk_list = []
         for s in sorted(d.chunks, key=lambda item: (item.position, item.chunk_id_external)):
             ent_list = []
-            for e in sorted(s.entities, key=lambda item: (item.start_char, item.end_char, str(item.id))):
+            for e in sorted(s.entities, key=lambda item: (
+                item.start_char if item.start_char is not None else float("inf"),
+                item.end_char if item.end_char is not None else float("inf"),
+                str(item.id),
+            )):
                 reviews = [
                     {
                         "id": str(r.id),
