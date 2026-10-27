@@ -217,7 +217,7 @@
             <p>Create or open a project using the <strong>⊕ Projects</strong> button above.</p>
             <div class="format-hint">
               <div class="hint-block"><strong>CSV columns</strong><br>source, document_id, cleaned_title, chunk_id, chunk_text, entities, triplets<br><code>entities: [{"entity_text":"...","entity_class":"...","start_char":0,"end_char":3}]</code></div>
-              <div class="hint-block">The backend locates entities during upload. Only predictions with valid, non-overlapping spans are loaded and highlighted. Triplets are ignored in this phase.</div>
+              <div class="hint-block">Every entity in the dataset is loaded. Exact matches, including one entity nested inside another, are highlighted. Entries without a text match appear below the chunk.</div>
               <div class="hint-block"><strong>JSON / JSONL</strong><br>Upload a JSON list of chunk objects or one chunk object per line. Every entity in the entities array is shown.</div>
             </div>
           </div>

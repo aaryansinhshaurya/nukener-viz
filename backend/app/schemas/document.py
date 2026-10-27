@@ -41,6 +41,7 @@ class UploadSummary(BaseModel):
     documents_created: int
     chunks_created: int
     entities_created: int
+    entities_relocated: int = 0
     entities_without_offsets: int = 0
     entities_skipped: int = 0
 

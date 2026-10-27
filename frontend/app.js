@@ -516,14 +516,15 @@ async function handleUpload(file, projectId = S.pid, projectName = S.pname, stat
   try {
     const summary = await api(`/projects/${projectId}/upload`, { method: "POST", body: form, isForm: true });
     const repaired = summary.documents_created === 0 && summary.chunks_created === 0;
+    const relocated = summary.entities_relocated || 0;
     const withoutHighlights = summary.entities_without_offsets || 0;
     const skipped = summary.entities_skipped || 0;
     setUploadStatus(repaired
-      ? `✅ ${summary.entities_created} missing entities added`
+      ? `✅ ${summary.entities_created} missing entities added${relocated ? ` · ${relocated} highlights restored` : ""}`
       : `✅ ${summary.documents_created} documents · ${summary.chunks_created} chunks · ${summary.entities_created} entities loaded${withoutHighlights ? ` · ${withoutHighlights} listed without highlights` : ""}${skipped ? ` · ${skipped} skipped` : ""}`, false, statusEl);
     await openProject(projectId, projectName);
     const notices = [];
-    if (repaired) notices.push(`${summary.entities_created} missing entities added to this project. Existing reviews were kept.`);
+    if (repaired && (summary.entities_created || relocated)) notices.push(`${summary.entities_created} missing entities added and ${relocated} highlights restored. Existing reviews were kept.`);
     if (withoutHighlights) notices.push(`${withoutHighlights} entities could not be located in the chunk text. They are still listed under their chunks with their original names.`);
     if (skipped) notices.push(`${skipped} predictions were skipped by the backend.`);
     if (notices.length) alert(notices.join("\n"));
@@ -769,12 +770,49 @@ function indexDocDetail() {
   S.entityIndex = new Map();
   S.entityCounts = {}; S.labels = new Set();
   for (const sent of S.docDetail.chunks) {
+    recoverNestedHighlights(sent);
     S.chunkIndex.set(sent.chunk_id_external, sent);
     for (const ent of sent.entities.filter(e => e.source === "model")) {
       S.entityIndex.set(ent.id, { entity: ent, chunkIdExternal: sent.chunk_id_external });
       S.entityCounts[ent.label] = (S.entityCounts[ent.label]||0) + 1;
       S.labels.add(ent.label);
       if (!S.activeLabels.has(ent.label)) S.activeLabels.add(ent.label);
+    }
+  }
+}
+
+function spansCanNest(start, end, assigned) {
+  return assigned.every(([otherStart, otherEnd]) =>
+    (start !== otherStart || end !== otherEnd) &&
+    (end <= otherStart || otherEnd <= start ||
+      (start <= otherStart && otherEnd <= end) ||
+      (otherStart <= start && end <= otherEnd)));
+}
+
+function recoverNestedHighlights(sent) {
+  // Older uploads stored a shorter entity without offsets when it sat inside
+  // another highlight. Recover its exact span for display and review.
+  const text = sent.text || "";
+  const assigned = sent.entities
+    .filter(e => e.source === "model" && Number.isInteger(e.start_char) && Number.isInteger(e.end_char))
+    .map(e => [e.start_char, e.end_char]);
+  const pending = sent.entities
+    .filter(e => e.source === "model" && (e.start_char == null || e.end_char == null))
+    .sort((a, b) => b.text.length - a.text.length);
+  for (const ent of pending) {
+    if (!ent.text) continue;
+    let start = text.indexOf(ent.text);
+    while (start !== -1) {
+      const end = start + ent.text.length;
+      const leftBounded = !/\p{L}|\p{N}/u.test(ent.text[0]) || start === 0 || !/[\p{L}\p{N}]/u.test(text[start - 1]);
+      const rightBounded = !/[\p{L}\p{N}]/u.test(ent.text[ent.text.length - 1]) || end === text.length || !/[\p{L}\p{N}]/u.test(text[end]);
+      if (leftBounded && rightBounded && spansCanNest(start, end, assigned)) {
+        ent.start_char = start;
+        ent.end_char = end;
+        assigned.push([start, end]);
+        break;
+      }
+      start = text.indexOf(ent.text, start + 1);
     }
   }
 }
@@ -821,7 +859,9 @@ function connectLockSocket() {
 /* ══════════════════════════════════════════════════════════
    Chunk / entity rendering
    ══════════════════════════════════════════════════════════ */
-function renderChunks() {
+function renderChunks(preserveScroll = false) {
+  const mainBody = _qs("mainBody");
+  const scrollTop = mainBody.scrollTop;
   const editable = canEditCurrentDoc();
   _qs("chunkPane").innerHTML = S.docDetail.chunks.map(sent => {
     const unlocated = sent.entities.filter(e => e.source === "model" && (e.start_char == null || e.end_char == null));
@@ -833,23 +873,35 @@ function renderChunks() {
         ${unlocated.map(ent => `<div class="unlocated-row" data-type="${escA(ent.label)}">${buildEntitySpan(ent)}<span class="unlocated-class">${esc(ent.label)}</span>${ent.confidence_score == null ? "" : `<span class="unlocated-score">Confidence ${esc(ent.confidence_score)}</span>`}</div>`).join("")}</div>` : ""}
     </div>`;
   }).join("");
-  _qs("mainBody").scrollTop = 0;
+  mainBody.scrollTop = preserveScroll ? scrollTop : 0;
   applyVisibility();
 }
 
 function buildSentHTML(sent) {
   const text = sent.text || "";
-  const ents = sent.entities.filter(e => e.source === "model" && Number.isInteger(e.start_char) && Number.isInteger(e.end_char)).sort((a,b)=>a.start_char-b.start_char);
-  if (!ents.length) return esc(text);
-  let html = "", cur = 0;
+  const ents = sent.entities
+    .filter(e => e.source === "model" && Number.isInteger(e.start_char) && Number.isInteger(e.end_char)
+      && 0 <= e.start_char && e.start_char < e.end_char && e.end_char <= text.length)
+    .sort((a,b) => a.start_char-b.start_char || b.end_char-a.end_char);
+  const roots = [], stack = [];
   for (const ent of ents) {
-    if (ent.start_char < cur || ent.start_char >= text.length) continue;
-    if (ent.start_char > cur) html += esc(text.slice(cur, ent.start_char));
-    html += buildEntitySpan(ent, text.slice(ent.start_char, ent.end_char));
-    cur = ent.end_char;
+    while (stack.length && ent.start_char >= stack[stack.length - 1].ent.end_char) stack.pop();
+    if (stack.length && ent.end_char > stack[stack.length - 1].ent.end_char) continue;
+    const node = {ent, children: []};
+    (stack.length ? stack[stack.length - 1].children : roots).push(node);
+    stack.push(node);
   }
-  if (cur < text.length) html += esc(text.slice(cur));
-  return html;
+  function renderRange(start, end, nodes) {
+    let html = "", cursor = start;
+    for (const node of nodes) {
+      html += esc(text.slice(cursor, node.ent.start_char));
+      const nested = renderRange(node.ent.start_char, node.ent.end_char, node.children);
+      html += buildEntitySpan(node.ent, text.slice(node.ent.start_char, node.ent.end_char), nested);
+      cursor = node.ent.end_char;
+    }
+    return html + esc(text.slice(cursor, end));
+  }
+  return renderRange(0, text.length, roots);
 }
 
 function getStyle(label) {
@@ -870,7 +922,7 @@ function getStyle(label) {
   return S.lStyle[label];
 }
 
-function buildEntitySpan(ent, displayText = ent.text) {
+function buildEntitySpan(ent, displayText = ent.text, nestedHTML = null) {
   const s = getStyle(ent.label);
   const verdict = ent.current_review ? ent.current_review.verdict.toLowerCase() : "none";
   const saving = S.saving.has(ent.id);
@@ -888,32 +940,24 @@ function buildEntitySpan(ent, displayText = ent.text) {
       <button class="ent-btn ent-btn-fp ${verdict==='fp'?'ent-active-fp':''}" ${dis||!editable?"disabled":""} onclick="setVerdict('${eidJs}','FP',event)">FP</button>
     </span>`;
 
-  return `<span class="ent-wrap ${isOpen?"open":""}"><span class="entity verdict-${verdict}" style="background:${s.bg};border-bottom-color:${s.bd}" data-type="${escA(ent.label)}" data-eid="${escA(ent.id)}" title="${escA(ent.text)}" onclick="toggleEntityBar('${eidJs}',event)">${esc(displayText)}</span>${bar}</span>`;
+  return `<span class="ent-wrap ${isOpen?"open":""}"><span class="entity verdict-${verdict}" style="background:${s.bg};border-bottom-color:${s.bd}" data-type="${escA(ent.label)}" data-eid="${escA(ent.id)}" title="${escA(ent.text)}" onclick="toggleEntityBar('${eidJs}',event)">${nestedHTML === null ? esc(displayText) : nestedHTML}</span>${bar}</span>`;
 }
 
 function toggleEntityBar(id, ev) {
   if (ev) ev.stopPropagation();
+  const ref = S.entityIndex.get(id);
+  if (ref && !S.activeLabels.has(ref.entity.label)) return;
   const prev = S.openEntityId;
   S.openEntityId = prev === id ? null : id;
-  if (prev && prev !== S.openEntityId) rerenderEntity(prev);
   rerenderEntity(id);
 }
 function closeMenu() {
   if (!S.openEntityId) return;
-  const prev = S.openEntityId; S.openEntityId = null; rerenderEntity(prev);
+  S.openEntityId = null; renderChunks(true);
 }
 
 function rerenderEntity(id) {
-  const el = [...document.querySelectorAll(".entity")].find(n => n.dataset.eid === String(id));
-  const ref = S.entityIndex.get(id);
-  if (!el || !ref) return;
-  const tmp = document.createElement("span");
-  const chunk = S.chunkIndex.get(ref.chunkIdExternal);
-  const ent = ref.entity;
-  const displayText = chunk && Number.isInteger(ent.start_char) && Number.isInteger(ent.end_char)
-    ? chunk.text.slice(ent.start_char, ent.end_char) : ent.text;
-  tmp.innerHTML = buildEntitySpan(ent, displayText);
-  el.closest(".ent-wrap").replaceWith(tmp.firstChild);
+  if (S.entityIndex.has(id) && S.docDetail) renderChunks(true);
 }
 
 async function setVerdict(entityId, verdict, ev) {

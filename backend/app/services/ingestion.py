@@ -8,7 +8,7 @@ import re
 from typing import List
 
 from app.schemas.document import ChunkIn
-from app.services.offset_matching import build, free, tier_canonical, tier_literal
+from app.services.offset_matching import build, tier_canonical, tier_literal
 
 
 MATH_NOTATION = re.compile(
@@ -129,6 +129,18 @@ def _math_equivalent(source_text: str, entity_text: str) -> bool:
             and build(source_text, False).string() == build(entity_text, False).string())
 
 
+def _spans_compatible(start: int, end: int, assigned: list[tuple[int, int]]) -> bool:
+    """Allow nested highlights, but not crossing or duplicate spans."""
+    for other_start, other_end in assigned:
+        if start == other_start and end == other_end:
+            return False
+        if (start < other_end and other_start < end
+                and not (start <= other_start and other_end <= end)
+                and not (other_start <= start and end <= other_end)):
+            return False
+    return True
+
+
 def align_chunks(chunks: List[ChunkIn]) -> tuple[List[ChunkIn], int]:
     """Keep every uploaded entity; highlight exact or math-equivalent spans."""
     without_offsets = 0
@@ -141,7 +153,7 @@ def align_chunks(chunks: List[ChunkIn]) -> tuple[List[ChunkIn], int]:
                     and 0 <= start < end <= len(chunk.chunk_text)
                     and (chunk.chunk_text[start:end] == entity.entity_text
                          or _math_equivalent(chunk.chunk_text[start:end], entity.entity_text))
-                    and free(start, end, occupied)):
+                    and _spans_compatible(start, end, occupied)):
                 occupied.append((start, end))
             else:
                 entity.start_char = entity.end_char = None
@@ -151,13 +163,13 @@ def align_chunks(chunks: List[ChunkIn]) -> tuple[List[ChunkIn], int]:
         # Prefer longer names so a short name cannot take a longer name's span.
         for entity in sorted(pending, key=lambda item: -len(item.entity_text)):
             match = next((span for span in tier_literal(chunk.chunk_text, entity.entity_text, 0)
-                          if free(*span, occupied)), None)
+                          if _spans_compatible(*span, occupied)), None)
             if match is None:
                 if math_ctx is None:
                     math_ctx = {"strict": build(chunk.chunk_text, False)}
                 math_ctx["name_strict"] = build(entity.entity_text, False)
                 match = next((span for span in tier_canonical(math_ctx, entity.entity_text, False, True)
-                              if free(*span, occupied)
+                              if _spans_compatible(*span, occupied)
                               and _math_equivalent(chunk.chunk_text[span[0]:span[1]], entity.entity_text)), None)
             if match is None:
                 without_offsets += 1
@@ -191,8 +203,8 @@ def validate_chunks(chunks: List[ChunkIn]) -> None:
             if (chunk.chunk_text[start:end] != entity.entity_text
                     and not _math_equivalent(chunk.chunk_text[start:end], entity.entity_text)):
                 errors.append(f"Chunk {chunk.chunk_id}: offsets [{start}:{end}] do not match {entity.entity_text!r}")
-            if any(start < used_end and used_start < end for used_start, used_end in spans):
-                errors.append(f"Chunk {chunk.chunk_id}: entity spans overlap")
+            if not _spans_compatible(start, end, spans):
+                errors.append(f"Chunk {chunk.chunk_id}: entity spans cross or duplicate")
             spans.append((start, end))
     if errors:
         raise IngestionError(errors)

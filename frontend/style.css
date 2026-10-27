@@ -359,14 +359,14 @@ code { font-family: "DM Mono", ui-monospace, monospace; font-size: 12px; }
 .entity:hover { filter: brightness(0.97); }
 .entity.verdict-tp { box-shadow: inset 0 -1.5px 0 var(--ok); }
 .entity.verdict-fp { opacity: .5; text-decoration: line-through; }
-.entity.entity-hidden { background: transparent !important; border-bottom-color: transparent !important; cursor: text; pointer-events: none; }
+.entity.entity-hidden { background: transparent !important; border-bottom-color: transparent !important; cursor: text; }
 
 .ent-bar {
   display: none; position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
   background: rgba(30,32,40,.94); backdrop-filter: blur(6px); color: #fff; border-radius: 10px;
   padding: 5px 6px; align-items: center; gap: 5px; white-space: nowrap; z-index: 20; box-shadow: var(--shadow-2);
 }
-.ent-wrap.open .ent-bar { display: flex; }
+.ent-wrap.open > .ent-bar { display: flex; }
 .ent-label-tip { font-size: 10.5px; color: rgba(255,255,255,.65); padding: 0 4px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .ent-confidence { font-size: 10.5px; color: rgba(255,255,255,.85); padding: 0 4px; font-variant-numeric: tabular-nums; }
 .ent-btn { border: none; background: rgba(255,255,255,.12); color: #fff; font-size: 11px; font-weight: 700; padding: 5px 9px; border-radius: 7px; cursor: pointer; }

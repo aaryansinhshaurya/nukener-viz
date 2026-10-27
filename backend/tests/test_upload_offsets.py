@@ -107,6 +107,46 @@ class UploadOffsetTests(unittest.TestCase):
         self.assertEqual(entity.entity_text, "\\beta")
         self.assertEqual(chunks[0].chunk_text[entity.start_char:entity.end_char], "β")
 
+    def test_nested_entities_both_receive_highlights(self):
+        text = "The use of 3-4.5 Tesla HTS coils balances performance."
+        row = {**self.row, "chunk_text": text, "entities": [
+            {"entity_text": "HTS coils", "entity_class": "Fusion Materials, Fuels, and Isotopes"},
+            {"entity_text": "3-4.5 Tesla HTS coils", "entity_class": "Fusion Metric"},
+        ]}
+        chunks, without_offsets = align_chunks(parse_json(json.dumps([row]).encode("utf-8")))
+        validate_chunks(chunks)
+        short, long = chunks[0].entities
+        self.assertEqual(without_offsets, 0)
+        self.assertEqual((long.start_char, long.end_char),
+                         (text.index("3-4.5 Tesla HTS coils"), text.index("3-4.5 Tesla HTS coils") + len(long.entity_text)))
+        self.assertEqual((short.start_char, short.end_char),
+                         (text.index("HTS coils"), text.index("HTS coils") + len(short.entity_text)))
+        self.assertLess(long.start_char, short.start_char)
+        self.assertEqual(long.end_char, short.end_char)
+
+    def test_reupload_restores_nested_offset_without_losing_entity(self):
+        text = "The use of 3-4.5 Tesla HTS coils balances performance."
+        row = {**self.row, "chunk_text": text, "entities": [
+            {"entity_text": "HTS coils", "entity_class": "Fusion Materials, Fuels, and Isotopes"},
+            {"entity_text": "3-4.5 Tesla HTS coils", "entity_class": "Fusion Metric"},
+        ]}
+        chunks, without_offsets = align_chunks(parse_json(json.dumps([row]).encode("utf-8")))
+        short, long = chunks[0].entities
+        old_short = SimpleNamespace(source=EntitySource.MODEL, start_char=None, end_char=None,
+                                    text=short.entity_text, label=short.entity_class)
+        old_long = SimpleNamespace(source=EntitySource.MODEL, start_char=long.start_char,
+                                   end_char=long.end_char, text=long.entity_text,
+                                   label=long.entity_class)
+        stored_chunk = SimpleNamespace(chunk_id_external="D1_0001", text=text,
+                                       entities=[old_short, old_long])
+        document = SimpleNamespace(doc_id_external="D1", chunks=[stored_chunk])
+        db = SimpleNamespace(add=lambda entity: self.fail("Should repair, not add"), commit=lambda: None)
+        summary = _add_missing_entities(db, [document], chunks, without_offsets)
+        self.assertEqual(summary.entities_created, 0)
+        self.assertEqual(summary.entities_relocated, 1)
+        self.assertEqual((old_short.start_char, old_short.end_char),
+                         (short.start_char, short.end_char))
+
     def test_reupload_rejects_old_predictions_not_in_entities_array(self):
         chunks, without_offsets = align_chunks(parse_json(json.dumps([self.row]).encode("utf-8")))
         old_entity = SimpleNamespace(source=EntitySource.MODEL, start_char=0, end_char=5,

@@ -88,44 +88,59 @@ def _add_missing_entities(db: Session, documents: list[Document], chunks: list[C
     uploaded = {(chunk.document_id, chunk.chunk_id) for chunk in chunks}
     if uploaded != set(existing):
         raise HTTPException(status_code=409, detail="This project has different documents or chunks. Create a new project for a different dataset.")
+    repairs = []
+    additions = []
     for item in chunks:
         stored = existing[(item.document_id, item.chunk_id)]
         if stored.text != item.chunk_text:
             raise HTTPException(status_code=409, detail=f"Chunk {item.chunk_id} differs from the existing dataset. No entities were added.")
-        uploaded_counts = Counter(
+        remaining = Counter(
             (entity.start_char, entity.end_char, entity.entity_text, entity.entity_class)
             for entity in item.entities
         )
-        stored_counts = Counter(
-            (entity.start_char, entity.end_char, entity.text, entity.label)
-            for entity in stored.entities if entity.source == EntitySource.MODEL
-        )
-        if any(count > uploaded_counts[key] for key, count in stored_counts.items()):
-            raise HTTPException(status_code=409, detail=(
-                "This project contains predictions that differ from the uploaded entities array. "
-                "Create a new project for the exact dataset; existing reviews remain in this project."
-            ))
-    added = 0
-    for item in chunks:
-        stored = existing[(item.document_id, item.chunk_id)]
-        known = Counter((e.start_char, e.end_char, e.text, e.label)
-                        for e in stored.entities if e.source == EntitySource.MODEL)
+        unmatched = []
+        for entity in stored.entities:
+            if entity.source != EntitySource.MODEL:
+                continue
+            key = (entity.start_char, entity.end_char, entity.text, entity.label)
+            if remaining[key]:
+                remaining[key] -= 1
+            else:
+                unmatched.append(entity)
+        for entity in unmatched:
+            replacement = next((prediction for prediction in item.entities
+                                if prediction.entity_text == entity.text
+                                and prediction.entity_class == entity.label
+                                and remaining[(prediction.start_char, prediction.end_char,
+                                               prediction.entity_text, prediction.entity_class)]), None)
+            if replacement is None:
+                raise HTTPException(status_code=409, detail=(
+                    "This project contains predictions that differ from the uploaded entities array. "
+                    "Create a new project for the exact dataset; existing reviews remain in this project."
+                ))
+            key = (replacement.start_char, replacement.end_char,
+                   replacement.entity_text, replacement.entity_class)
+            remaining[key] -= 1
+            repairs.append((entity, replacement))
         for prediction in item.entities:
             key = (prediction.start_char, prediction.end_char, prediction.entity_text, prediction.entity_class)
-            if known[key]:
-                known[key] -= 1
-                continue
-            db.add(Entity(
-                chunk_id=stored.id, text=prediction.entity_text,
-                label=prediction.entity_class,
-                start_char=prediction.start_char, end_char=prediction.end_char,
-                confidence_score=prediction.entity_confidence_score,
-            ))
-            added += 1
+            if remaining[key]:
+                additions.append((stored, prediction))
+                remaining[key] -= 1
+
+    for entity, prediction in repairs:
+        entity.start_char, entity.end_char = prediction.start_char, prediction.end_char
+    for stored, prediction in additions:
+        db.add(Entity(
+            chunk_id=stored.id, text=prediction.entity_text,
+            label=prediction.entity_class,
+            start_char=prediction.start_char, end_char=prediction.end_char,
+            confidence_score=prediction.entity_confidence_score,
+        ))
     db.commit()
     return UploadSummary(
-        documents_created=0, chunks_created=0, entities_created=added,
-        entities_without_offsets=entities_without_offsets,
+        documents_created=0, chunks_created=0, entities_created=len(additions),
+        entities_relocated=len(repairs), entities_without_offsets=entities_without_offsets,
     )
 
 
