@@ -20,11 +20,13 @@ class IngestionError(Exception):
 def parse_dataset(file_bytes: bytes, filename: str) -> List[ChunkIn]:
     """Choose the dataset parser from the uploaded filename."""
     name = filename.strip().lower()
-    if name.endswith((".json", ".josn")):
+    if name.endswith(".json"):
         return parse_json(file_bytes)
+    if name.endswith(".jsonl"):
+        return parse_jsonl(file_bytes)
     if name.endswith(".csv"):
         return parse_csv(file_bytes)
-    raise IngestionError(["Unsupported file type — upload a .csv, .json, or .josn file"])
+    raise IngestionError(["Unsupported file type — upload a .csv, .json, or jsonl file"])
 
 
 def _parse_entities(raw, row_label: str) -> list[dict]:
@@ -68,18 +70,47 @@ def parse_csv(file_bytes: bytes) -> List[ChunkIn]:
 def parse_json(file_bytes: bytes) -> List[ChunkIn]:
     try:
         data = json.loads(file_bytes.decode("utf-8-sig"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except UnicodeDecodeError as exc:
         raise IngestionError([f"Invalid JSON file: {exc}"]) from exc
+    except json.JSONDecodeError as exc:
+        # Some prediction exports contain one JSON object per line but use .json.
+        if len([line for line in file_bytes.splitlines() if line.strip()]) > 1:
+            return parse_jsonl(file_bytes)
+        raise IngestionError([f"Invalid JSON file: {exc}"]) from exc
+    if isinstance(data, dict):
+        data = [data]
     if not isinstance(data, list):
-        raise IngestionError(["JSON file must be a list of chunk objects"])
+        raise IngestionError(["JSON file must contain chunk objects"])
+    return _parse_json_items(enumerate(data, start=1), "Item")
+
+
+def parse_jsonl(file_bytes: bytes) -> List[ChunkIn]:
+    try:
+        lines = file_bytes.decode("utf-8-sig").splitlines()
+    except UnicodeDecodeError as exc:
+        raise IngestionError([f"JSONL must be UTF-8: {exc}"]) from exc
+    items, errors = [], []
+    for number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            items.append((number, json.loads(line)))
+        except json.JSONDecodeError as exc:
+            errors.append(f"Line {number}: invalid JSON: {exc.msg}")
+    if errors:
+        raise IngestionError(errors)
+    return _parse_json_items(items, "Line")
+
+
+def _parse_json_items(items, label: str) -> List[ChunkIn]:
     chunks, errors = [], []
-    for number, item in enumerate(data, start=1):
+    for number, item in items:
         try:
             if not isinstance(item, dict):
                 raise ValueError("expected a chunk object")
-            chunks.append(ChunkIn(**{**item, "entities": _parse_entities(item.get("entities", []), f"Item {number}")}))
+            chunks.append(ChunkIn(**{**item, "entities": _parse_entities(item.get("entities", []), f"{label} {number}")}))
         except Exception as exc:
-            errors.append(f"Item {number}: {exc}")
+            errors.append(f"{label} {number}: {exc}")
     if errors:
         raise IngestionError(errors)
     return chunks

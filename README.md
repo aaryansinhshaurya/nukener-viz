@@ -9,9 +9,9 @@ A collaborative application for checking named entity predictions. Reviewers mar
 
 ## Input
 
-Upload CSV rows with `source, document_id, cleaned_title, chunk_id, chunk_text, entities, triplets`, or JSON objects with the same fields. Each row is one chunk; input row order is preserved within each document. `entities` is a JSON array containing `entity_text`, `entity_class`, and optionally `entity_confidence_score`, `start_char`, and `end_char`. Offsets are zero-based and `end_char` is exclusive. During upload, the backend locates entities in chunk text, including LaTeX and OCR spacing variants. It loads and highlights only entities with valid, non-overlapping spans; the upload response reports how many predictions were skipped. Confidence is displayed with the entity and does not affect reviews or metrics. `triplets` is accepted but ignored for now.
+Upload CSV rows with `source, document_id, cleaned_title, chunk_id, chunk_text, entities, triplets`, JSON lists of chunk objects, or JSONL with one chunk object per line. Each row is one chunk; input row order is preserved within each document. `entities` is a JSON array containing `entity_text`, `entity_class`, and optionally `entity_confidence_score`, `start_char`, and `end_char`. Offsets are zero-based and `end_char` is exclusive. During upload, the backend locates entities in chunk text, including LaTeX and OCR spacing variants. It loads and highlights only entities with valid, non-overlapping spans; the upload response reports how many predictions were skipped. Confidence is displayed with the entity and does not affect reviews or metrics. `triplets` is accepted but ignored for now.
 
-Upload the original JSON or CSV file directly; no preprocessing script is required. JSON files named with the common `.josn` extension typo are also accepted and validated as JSON. Repeated mentions are assigned to distinct occurrences where possible; inspect ambiguous cases if the model intended a later occurrence.
+Upload the original CSV, JSON, or JSONL file directly; no preprocessing script is required. Newline-delimited JSON is also accepted when saved with a `.json` extension. Repeated mentions are assigned to distinct occurrences where possible; inspect ambiguous cases if the model intended a later occurrence.
 
 ## Local backend
 

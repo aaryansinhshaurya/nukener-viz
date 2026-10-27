@@ -3,7 +3,7 @@ import io
 import json
 import unittest
 
-from app.services.ingestion import align_chunks, parse_csv, parse_json, parse_dataset, validate_chunks
+from app.services.ingestion import IngestionError, align_chunks, parse_csv, parse_json, parse_dataset, validate_chunks
 
 
 class UploadOffsetTests(unittest.TestCase):
@@ -44,9 +44,27 @@ class UploadOffsetTests(unittest.TestCase):
         chunks = parse_json(json.dumps([self.row]).encode("utf-8"))
         self.assert_upload_result(chunks)
 
-    def test_josn_filename_uses_json_parser(self):
-        chunks = parse_dataset(json.dumps([self.row]).encode("utf-8"), "predictions.JOSN")
+    def test_jsonl_filename_uses_jsonl_parser(self):
+        chunks = parse_dataset((json.dumps(self.row) + "\n").encode("utf-8"), "predictions.JSONL")
         self.assert_upload_result(chunks)
+
+    def test_json_filename_accepts_newline_delimited_records(self):
+        second = {**self.row, "chunk_id": "D1_0002"}
+        payload = "\n".join(json.dumps(item) for item in (self.row, second)).encode("utf-8")
+        chunks = parse_dataset(payload, "predictions.json")
+        self.assertEqual([chunk.chunk_id for chunk in chunks], ["D1_0001", "D1_0002"])
+        validate_chunks(align_chunks(chunks)[0])
+
+    def test_json_filename_accepts_single_chunk_object(self):
+        chunks = parse_dataset(json.dumps(self.row).encode("utf-8"), "predictions.json")
+        self.assert_upload_result(chunks)
+
+    def test_unsupported_extension_names_jsonl(self):
+        with self.assertRaises(IngestionError) as raised:
+            parse_dataset(b"", "predictions.txt")
+        self.assertEqual(raised.exception.errors, [
+            "Unsupported file type — upload a .csv, .json, or jsonl file"
+        ])
 
     def test_csv_without_offsets_is_aligned_before_validation(self):
         output = io.StringIO(newline="")
