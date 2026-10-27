@@ -17,6 +17,16 @@ class IngestionError(Exception):
         super().__init__(";\n".join(errors))
 
 
+def parse_dataset(file_bytes: bytes, filename: str) -> List[ChunkIn]:
+    """Choose the dataset parser from the uploaded filename."""
+    name = filename.strip().lower()
+    if name.endswith((".json", ".josn")):
+        return parse_json(file_bytes)
+    if name.endswith(".csv"):
+        return parse_csv(file_bytes)
+    raise IngestionError(["Unsupported file type — upload a .csv, .json, or .josn file"])
+
+
 def _parse_entities(raw, row_label: str) -> list[dict]:
     if isinstance(raw, str):
         try:

@@ -8,7 +8,7 @@ from app.models.user import User
 from app.schemas.document import UploadSummary, DocumentSummaryOut, DocumentDetailOut, ChunkOut, EntityOut, ChunkIn
 from app.schemas.review import ReviewOut
 from app.auth.dependencies import require_project_role
-from app.services.ingestion import parse_csv, parse_json, align_chunks, validate_chunks, IngestionError
+from app.services.ingestion import parse_dataset, align_chunks, validate_chunks, IngestionError
 from app.services.reviews import get_latest_reviews_map
 from app.config import settings
 
@@ -27,14 +27,8 @@ def upload_dataset(
     raw = file.file.read(settings.MAX_UPLOAD_BYTES + 1)
     if len(raw) > settings.MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
-    filename = (file.filename or "").lower()
     try:
-        if filename.endswith(".json"):
-            chunks = parse_json(raw)
-        elif filename.endswith(".csv"):
-            chunks = parse_csv(raw)
-        else:
-            raise IngestionError(["Unsupported file type — upload a .csv or .json file"])
+        chunks = parse_dataset(raw, file.filename or "")
         chunks, entities_skipped = align_chunks(chunks)
         validate_chunks(chunks)
     except IngestionError as exc:

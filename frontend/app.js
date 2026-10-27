@@ -146,6 +146,25 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("uploadFileInput").addEventListener("change", e => {
     if (e.target.files[0]) handleUpload(e.target.files[0]);
+    e.target.value = "";
+  });
+  _qs("dashboardProjects").addEventListener("click", e => {
+    const button = e.target.closest("button[data-project-action]");
+    if (!button) return;
+    const project = S.projects.find(p => p.id === button.dataset.projectId);
+    if (!project) return;
+    if (button.dataset.projectAction === "open") openProject(project.id, project.name);
+    if (project.role !== "owner") return;
+    if (button.dataset.projectAction === "upload") startDashboardUpload(project.id);
+    if (button.dataset.projectAction === "delete") deleteProject(project.id, project.name);
+  });
+  _qs("dashboardUploadInput").addEventListener("change", e => {
+    const file = e.target.files[0];
+    const project = S.projects.find(p => p.id === e.target.dataset.projectId && p.role === "owner");
+    e.target.value = "";
+    if (file && project) {
+      handleUpload(file, project.id, project.name, _qs(`dashboard-upload-status-${project.id}`));
+    }
   });
   document.addEventListener("click", e => { if (!e.target.closest(".ent-wrap")) closeMenu(); });
   document.addEventListener("keydown", e => {
@@ -430,10 +449,22 @@ function renderDashboardProjects(projects) {
     el.innerHTML = `<div class="dashboard-card"><h3>Your first project starts here</h3><p>Create a project, then upload your model predictions.</p><button class="btn btn-primary" style="margin-top:18px" onclick="showModal()">Create project</button></div>`;
     return;
   }
-  el.innerHTML = projects.map(p => `<button class="dashboard-card" onclick="openProject('${p.id}')">
-    <span class="project-role">${esc(p.role || "member")}</span><h3>${esc(p.name)}</h3>
-    <p>Created ${(p.created_at || "").slice(0,10)} · Open project →</p>
-  </button>`).join("");
+  el.innerHTML = projects.map(p => `<article class="dashboard-card">
+    <button class="dashboard-card-open" type="button" data-project-action="open" data-project-id="${escA(p.id)}">
+      <span class="project-role">${esc(p.role || "member")}</span><h3>${esc(p.name)}</h3>
+      <p>Created ${(p.created_at || "").slice(0,10)} · Open project →</p>
+    </button>
+    ${p.role === "owner" ? `<div class="dashboard-card-actions">
+      <button class="btn btn-ghost" type="button" data-project-action="upload" data-project-id="${escA(p.id)}" aria-label="Upload dataset to ${escA(p.name)}">Upload dataset</button>
+      <button class="btn btn-danger" type="button" data-project-action="delete" data-project-id="${escA(p.id)}" aria-label="Delete ${escA(p.name)}" title="Delete project">🗑️</button>
+    </div><div class="dashboard-card-status" id="dashboard-upload-status-${escA(p.id)}" role="status" aria-live="polite"></div>` : ""}
+  </article>`).join("");
+}
+
+function startDashboardUpload(projectId) {
+  const input = _qs("dashboardUploadInput");
+  input.dataset.projectId = projectId;
+  input.click();
 }
 
 async function loadTrash() {
@@ -473,27 +504,28 @@ async function createProject() {
   } catch (e) { alert("Could not create project: " + e.message); }
 }
 
-async function handleUpload(file) {
-  if (!S.pid) { setUploadStatus("❌ Create a project first.", true); return; }
-  setUploadStatus(`⏳ Uploading ${file.name}…`);
+async function handleUpload(file, projectId = S.pid, projectName = S.pname, statusEl = _qs("uploadStatus")) {
+  if (!projectId) { setUploadStatus("❌ Create a project first.", true, statusEl); return; }
+  setUploadStatus(`⏳ Uploading ${file.name}…`, false, statusEl);
   const form = new FormData();
   form.append("file", file);
   try {
-    const summary = await api(`/projects/${S.pid}/upload`, { method: "POST", body: form, isForm: true });
+    const summary = await api(`/projects/${projectId}/upload`, { method: "POST", body: form, isForm: true });
     const repaired = summary.documents_created === 0 && summary.chunks_created === 0;
     const skipped = summary.entities_skipped || 0;
     setUploadStatus(repaired
       ? `✅ ${summary.entities_created} missing entities added`
-      : `✅ ${summary.documents_created} documents · ${summary.chunks_created} chunks · ${summary.entities_created} entities loaded${skipped ? ` · ${skipped} skipped` : ""}`);
-    await openProject(S.pid, S.pname);
+      : `✅ ${summary.documents_created} documents · ${summary.chunks_created} chunks · ${summary.entities_created} entities loaded${skipped ? ` · ${skipped} skipped` : ""}`, false, statusEl);
+    await openProject(projectId, projectName);
     const notices = [];
     if (repaired) notices.push(`${summary.entities_created} missing entities added to this project. Existing reviews were kept.`);
     if (summary.entities_skipped) notices.push(`${summary.entities_skipped} predictions had no valid text span and were skipped. Only predictions that can be highlighted were loaded.`);
     if (notices.length) alert(notices.join("\n"));
-  } catch (e) { setUploadStatus(`❌ ${e.message}`, true); }
+  } catch (e) { setUploadStatus(`❌ ${e.message}`, true, statusEl); }
 }
-function setUploadStatus(msg, err=false) {
-  const el = _qs("uploadStatus"); el.textContent = msg; el.style.color = err ? "#e5484d" : "";
+function setUploadStatus(msg, err=false, el=_qs("uploadStatus")) {
+  if (!el) return;
+  el.textContent = msg; el.style.color = err ? "var(--bad)" : "";
 }
 
 /* Drag & drop onto the upload zone */

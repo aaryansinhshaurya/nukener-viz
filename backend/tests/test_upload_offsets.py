@@ -3,7 +3,7 @@ import io
 import json
 import unittest
 
-from app.services.ingestion import align_chunks, parse_csv, parse_json, validate_chunks
+from app.services.ingestion import align_chunks, parse_csv, parse_json, parse_dataset, validate_chunks
 
 
 class UploadOffsetTests(unittest.TestCase):
@@ -42,6 +42,10 @@ class UploadOffsetTests(unittest.TestCase):
 
     def test_json_without_offsets_is_aligned_before_validation(self):
         chunks = parse_json(json.dumps([self.row]).encode("utf-8"))
+        self.assert_upload_result(chunks)
+
+    def test_josn_filename_uses_json_parser(self):
+        chunks = parse_dataset(json.dumps([self.row]).encode("utf-8"), "predictions.JOSN")
         self.assert_upload_result(chunks)
 
     def test_csv_without_offsets_is_aligned_before_validation(self):

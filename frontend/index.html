@@ -91,7 +91,7 @@
 
 <section class="dashboard hidden" id="dashboardPage">
   <header class="dashboard-header"><div><div class="eyebrow brand-eyebrow">NukeNER Review · Your workspace</div><h1 id="dashboardGreeting">Projects</h1></div><div class="dashboard-actions"><button class="btn btn-ghost theme-toggle" type="button" onclick="toggleTheme()" aria-label="Switch color theme"></button><button class="btn btn-primary" onclick="showModal()">+ New project</button><button class="btn btn-ghost" onclick="logout()">Log out</button></div></header>
-  <div class="dashboard-content"><div id="pendingInviteBanner" class="invite-preview hidden" role="status" aria-live="polite"></div><h2>Active projects</h2><div class="dashboard-grid" id="dashboardProjects"></div><h2>Recently deleted</h2><div id="dashboardTrash" class="dashboard-trash"></div></div>
+  <div class="dashboard-content"><div id="pendingInviteBanner" class="invite-preview hidden" role="status" aria-live="polite"></div><h2>Active projects</h2><div class="dashboard-grid" id="dashboardProjects"></div><input type="file" id="dashboardUploadInput" accept=".csv,.json,.josn" class="hidden" aria-label="Upload project dataset"><h2>Recently deleted</h2><div id="dashboardTrash" class="dashboard-trash"></div></div>
 </section>
 
 <!-- ══ PROJECT PICKER MODAL ══════════════════════════════ -->
@@ -110,10 +110,10 @@
     <div id="uploadSection" style="display:none;margin-top:16px">
       <div class="divider-row"><hr class="divider"><span class="divider-label">Upload dataset</span><hr class="divider"></div>
       <label class="upload-zone" id="uploadZone">
-        <input type="file" id="uploadFileInput" accept=".csv,.json" style="display:none">
+        <input type="file" id="uploadFileInput" accept=".csv,.json,.josn" style="display:none">
         <div class="upload-icon">📂</div>
         <div class="upload-label">Click to upload or drag &amp; drop</div>
-        <div class="upload-sub">CSV or JSON — document_id, source, cleaned_title, chunk_id, chunk_text, entities, triplets. Offsets are added during upload; predictions without a valid highlight are skipped.</div>
+        <div class="upload-sub">CSV or JSON (.json or .josn) — document_id, source, cleaned_title, chunk_id, chunk_text, entities, triplets. Offsets are added during upload; predictions without a valid highlight are skipped.</div>
       </label>
       <div id="uploadStatus" class="status-line"></div>
     </div>
