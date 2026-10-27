@@ -192,7 +192,8 @@ code { font-family: "DM Mono", ui-monospace, monospace; font-size: 12px; }
 .dashboard-card-open { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; text-align: left; font: inherit; cursor: pointer; }
 .dashboard-card-open:focus-visible, .dashboard-card-actions .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .dashboard-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 18px; }
-.dashboard-card-actions .btn { justify-content: center; }
+.dashboard-card-actions .btn { flex: 1 1 140px; justify-content: space-between; padding: 9px 12px; white-space: nowrap; }
+.dashboard-card-actions svg { width: 18px; height: 18px; flex: none; }
 .dashboard-card-status { margin-top: 10px; font-size: 12px; overflow-wrap: anywhere; }
 .dashboard-card h3 { font-size: 18px; margin: 10px 0 8px; }
 .dashboard-card p { color: var(--t2); margin: 0; font-size: 12px; }

@@ -455,8 +455,12 @@ function renderDashboardProjects(projects) {
       <p>Created ${(p.created_at || "").slice(0,10)} · Open project →</p>
     </button>
     ${p.role === "owner" ? `<div class="dashboard-card-actions">
-      <button class="btn btn-ghost" type="button" data-project-action="upload" data-project-id="${escA(p.id)}" aria-label="Upload dataset to ${escA(p.name)}">Upload dataset</button>
-      <button class="btn btn-danger" type="button" data-project-action="delete" data-project-id="${escA(p.id)}" aria-label="Delete ${escA(p.name)}" title="Delete project">🗑️</button>
+      <button class="btn btn-ghost" type="button" data-project-action="upload" data-project-id="${escA(p.id)}" aria-label="Upload dataset to ${escA(p.name)}">Upload Dataset
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 15V3m0 0L7 8m5-5 5 5M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      </button>
+      <button class="btn btn-danger" type="button" data-project-action="delete" data-project-id="${escA(p.id)}" aria-label="Delete ${escA(p.name)}">Delete Project
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 14h10l1-14M9 7V4h6v3"/></svg>
+      </button>
     </div><div class="dashboard-card-status" id="dashboard-upload-status-${escA(p.id)}" role="status" aria-live="polite"></div>` : ""}
   </article>`).join("");
 }
