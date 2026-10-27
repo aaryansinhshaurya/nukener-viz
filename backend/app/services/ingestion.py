@@ -8,7 +8,13 @@ import re
 from typing import List
 
 from app.schemas.document import ChunkIn
-from app.services.offset_matching import enrich, filter_uploadable
+from app.services.offset_matching import build, free, tier_canonical, tier_literal
+
+
+MATH_NOTATION = re.compile(
+    r"\\[A-Za-z]+|[\$%°º˚×✕⋅·∙•±∓∼≈≃≤≥<>=≠→∞√∝⟨⟩〈〉₀-₉⁰-⁹−]|"
+    r"[α-ωΑ-Ω]|\d\s*[-−]\s*\d"
+)
 
 
 class IngestionError(Exception):
@@ -20,7 +26,8 @@ class IngestionError(Exception):
 def parse_dataset(file_bytes: bytes, filename: str) -> List[ChunkIn]:
     """Choose the dataset parser from the uploaded filename."""
     name = filename.strip().lower()
-    if name.endswith(".json"):
+    # Windows short filenames may expose a .json file as .JSO.
+    if name.endswith((".json", ".jso")):
         return parse_json(file_bytes)
     if name.endswith(".jsonl"):
         return parse_jsonl(file_bytes)
@@ -116,29 +123,48 @@ def _parse_json_items(items, label: str) -> List[ChunkIn]:
     return chunks
 
 
+def _math_equivalent(source_text: str, entity_text: str) -> bool:
+    """Allow notation variants without changing the uploaded entity text."""
+    return (bool(MATH_NOTATION.search(source_text) or MATH_NOTATION.search(entity_text))
+            and build(source_text, False).string() == build(entity_text, False).string())
+
+
 def align_chunks(chunks: List[ChunkIn]) -> tuple[List[ChunkIn], int]:
-    """Apply the CLI offset matcher, then omit predictions with no valid highlight."""
-    rows = [chunk.model_dump() for chunk in chunks]
-    for row in rows:
-        text = row["chunk_text"]
+    """Keep every uploaded entity; highlight exact or math-equivalent spans."""
+    without_offsets = 0
+    for chunk in chunks:
         occupied = []
-        for entity in row["entities"]:
-            start, end = entity.get("start_char"), entity.get("end_char")
-            if start is None and end is None:
-                continue
-            if (type(start) is not int or type(end) is not int
-                    or not 0 <= start < end <= len(text)
-                    or text[start:end] != entity["entity_text"]
-                    or any(start < used_end and used_start < end for used_start, used_end in occupied)):
-                entity["start_char"] = entity["end_char"] = None
-            else:
+        pending = []
+        for entity in chunk.entities:
+            start, end = entity.start_char, entity.end_char
+            if (type(start) is int and type(end) is int
+                    and 0 <= start < end <= len(chunk.chunk_text)
+                    and (chunk.chunk_text[start:end] == entity.entity_text
+                         or _math_equivalent(chunk.chunk_text[start:end], entity.entity_text))
+                    and free(start, end, occupied)):
                 occupied.append((start, end))
-    try:
-        enrich(rows)
-        skipped = filter_uploadable(rows)
-        return [ChunkIn(**row) for row in rows], skipped
-    except (ValueError, TypeError) as exc:
-        raise IngestionError([f"Could not align entity offsets: {exc}"]) from exc
+            else:
+                entity.start_char = entity.end_char = None
+                pending.append(entity)
+
+        math_ctx = None
+        # Prefer longer names so a short name cannot take a longer name's span.
+        for entity in sorted(pending, key=lambda item: -len(item.entity_text)):
+            match = next((span for span in tier_literal(chunk.chunk_text, entity.entity_text, 0)
+                          if free(*span, occupied)), None)
+            if match is None:
+                if math_ctx is None:
+                    math_ctx = {"strict": build(chunk.chunk_text, False)}
+                math_ctx["name_strict"] = build(entity.entity_text, False)
+                match = next((span for span in tier_canonical(math_ctx, entity.entity_text, False, True)
+                              if free(*span, occupied)
+                              and _math_equivalent(chunk.chunk_text[span[0]:span[1]], entity.entity_text)), None)
+            if match is None:
+                without_offsets += 1
+                continue
+            entity.start_char, entity.end_char = match
+            occupied.append(match)
+    return chunks, without_offsets
 
 
 def validate_chunks(chunks: List[ChunkIn]) -> None:
@@ -162,28 +188,11 @@ def validate_chunks(chunks: List[ChunkIn]) -> None:
             start, end = entity.start_char, entity.end_char
             if start is None:
                 continue
-            if chunk.chunk_text[start:end] != entity.entity_text:
+            if (chunk.chunk_text[start:end] != entity.entity_text
+                    and not _math_equivalent(chunk.chunk_text[start:end], entity.entity_text)):
                 errors.append(f"Chunk {chunk.chunk_id}: offsets [{start}:{end}] do not match {entity.entity_text!r}")
             if any(start < used_end and used_start < end for used_start, used_end in spans):
                 errors.append(f"Chunk {chunk.chunk_id}: entity spans overlap")
             spans.append((start, end))
-        for entity in chunk.entities:
-            if entity.start_char is not None:
-                continue
-            found = None
-            for flags in (0, re.IGNORECASE):
-                for match in re.finditer(re.escape(entity.entity_text), chunk.chunk_text, flags):
-                    start, end = match.span()
-                    if end - start != len(entity.entity_text):
-                        continue
-                    if all(end <= used_start or start >= used_end for used_start, used_end in spans):
-                        found = (start, end)
-                        break
-                if found is not None:
-                    break
-            if found is not None:
-                entity.start_char, entity.end_char = found
-                entity.entity_text = chunk.chunk_text[found[0]:found[1]]
-                spans.append(found)
     if errors:
         raise IngestionError(errors)

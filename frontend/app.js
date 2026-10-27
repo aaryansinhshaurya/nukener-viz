@@ -516,14 +516,16 @@ async function handleUpload(file, projectId = S.pid, projectName = S.pname, stat
   try {
     const summary = await api(`/projects/${projectId}/upload`, { method: "POST", body: form, isForm: true });
     const repaired = summary.documents_created === 0 && summary.chunks_created === 0;
+    const withoutHighlights = summary.entities_without_offsets || 0;
     const skipped = summary.entities_skipped || 0;
     setUploadStatus(repaired
       ? `✅ ${summary.entities_created} missing entities added`
-      : `✅ ${summary.documents_created} documents · ${summary.chunks_created} chunks · ${summary.entities_created} entities loaded${skipped ? ` · ${skipped} skipped` : ""}`, false, statusEl);
+      : `✅ ${summary.documents_created} documents · ${summary.chunks_created} chunks · ${summary.entities_created} entities loaded${withoutHighlights ? ` · ${withoutHighlights} listed without highlights` : ""}${skipped ? ` · ${skipped} skipped` : ""}`, false, statusEl);
     await openProject(projectId, projectName);
     const notices = [];
     if (repaired) notices.push(`${summary.entities_created} missing entities added to this project. Existing reviews were kept.`);
-    if (summary.entities_skipped) notices.push(`${summary.entities_skipped} predictions had no valid text span and were skipped. Only predictions that can be highlighted were loaded.`);
+    if (withoutHighlights) notices.push(`${withoutHighlights} entities could not be located in the chunk text. They are still listed under their chunks with their original names.`);
+    if (skipped) notices.push(`${skipped} predictions were skipped by the backend.`);
     if (notices.length) alert(notices.join("\n"));
   } catch (e) { setUploadStatus(`❌ ${e.message}`, true, statusEl); }
 }
@@ -827,7 +829,7 @@ function renderChunks() {
     <div class="sent-card">
       <div class="sent-meta">${esc(S.docDetail.doc_id_external)} · ${esc(sent.chunk_id_external)}</div>
       <div class="sent-text" data-sent="${escA(sent.chunk_id_external)}" data-editable="${editable}">${buildSentHTML(sent)}</div>
-      ${unlocated.length ? `<div class="unlocated-list"><div class="unlocated-heading">Predictions without a text highlight</div>
+      ${unlocated.length ? `<div class="unlocated-list"><div class="unlocated-heading">Entities from the dataset without a text highlight</div>
         ${unlocated.map(ent => `<div class="unlocated-row" data-type="${escA(ent.label)}">${buildEntitySpan(ent)}<span class="unlocated-class">${esc(ent.label)}</span>${ent.confidence_score == null ? "" : `<span class="unlocated-score">Confidence ${esc(ent.confidence_score)}</span>`}</div>`).join("")}</div>` : ""}
     </div>`;
   }).join("");
@@ -843,7 +845,7 @@ function buildSentHTML(sent) {
   for (const ent of ents) {
     if (ent.start_char < cur || ent.start_char >= text.length) continue;
     if (ent.start_char > cur) html += esc(text.slice(cur, ent.start_char));
-    html += buildEntitySpan(ent);
+    html += buildEntitySpan(ent, text.slice(ent.start_char, ent.end_char));
     cur = ent.end_char;
   }
   if (cur < text.length) html += esc(text.slice(cur));
@@ -868,7 +870,7 @@ function getStyle(label) {
   return S.lStyle[label];
 }
 
-function buildEntitySpan(ent) {
+function buildEntitySpan(ent, displayText = ent.text) {
   const s = getStyle(ent.label);
   const verdict = ent.current_review ? ent.current_review.verdict.toLowerCase() : "none";
   const saving = S.saving.has(ent.id);
@@ -880,13 +882,13 @@ function buildEntitySpan(ent) {
   const reviewer = ent.current_review ? ` · last: ${esc(ent.current_review.reviewer_name)}` : "";
   const confidence = ent.confidence_score == null ? "" : `<span class="ent-confidence" title="Model confidence score">Confidence ${esc(ent.confidence_score)}</span>`;
   const bar = `<span class="ent-bar" onclick="event.stopPropagation()">
-      <span class="ent-label-tip" title="${escA(ent.label)}${escA(reviewer)}">${esc(ent.label)}${reviewer}</span>
+      <span class="ent-label-tip" title="${escA(ent.text)} · ${escA(ent.label)}${escA(reviewer)}">${esc(ent.text)} · ${esc(ent.label)}${reviewer}</span>
       ${confidence}
       <button class="ent-btn ent-btn-tp ${verdict==='tp'?'ent-active-tp':''}" ${dis||!editable?"disabled":""} onclick="setVerdict('${eidJs}','TP',event)">TP</button>
       <button class="ent-btn ent-btn-fp ${verdict==='fp'?'ent-active-fp':''}" ${dis||!editable?"disabled":""} onclick="setVerdict('${eidJs}','FP',event)">FP</button>
     </span>`;
 
-  return `<span class="ent-wrap ${isOpen?"open":""}"><span class="entity verdict-${verdict}" style="background:${s.bg};border-bottom-color:${s.bd}" data-type="${escA(ent.label)}" data-eid="${escA(ent.id)}" onclick="toggleEntityBar('${eidJs}',event)">${esc(ent.text)}</span>${bar}</span>`;
+  return `<span class="ent-wrap ${isOpen?"open":""}"><span class="entity verdict-${verdict}" style="background:${s.bg};border-bottom-color:${s.bd}" data-type="${escA(ent.label)}" data-eid="${escA(ent.id)}" title="${escA(ent.text)}" onclick="toggleEntityBar('${eidJs}',event)">${esc(displayText)}</span>${bar}</span>`;
 }
 
 function toggleEntityBar(id, ev) {
@@ -906,7 +908,11 @@ function rerenderEntity(id) {
   const ref = S.entityIndex.get(id);
   if (!el || !ref) return;
   const tmp = document.createElement("span");
-  tmp.innerHTML = buildEntitySpan(ref.entity);
+  const chunk = S.chunkIndex.get(ref.chunkIdExternal);
+  const ent = ref.entity;
+  const displayText = chunk && Number.isInteger(ent.start_char) && Number.isInteger(ent.end_char)
+    ? chunk.text.slice(ent.start_char, ent.end_char) : ent.text;
+  tmp.innerHTML = buildEntitySpan(ent, displayText);
   el.closest(".ent-wrap").replaceWith(tmp.firstChild);
 }
 

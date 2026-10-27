@@ -13,9 +13,9 @@ Matching cascade (first tier that yields a free span wins):
   acronym   initialism of a multi-word entity (metallic glasses -> MGs)
   subword   match without word-boundary check (last resort)
 
-entity_text is rewritten to the real source span; the model's wording is kept in
-`original_entity_text`; the tier used is stored in `match_method`.
-The upload pipeline omits predictions without valid, non-overlapping spans.
+The legacy enrichment helper rewrites entity_text to the source span and records
+the model's wording in `original_entity_text`. Dataset uploads now use exact or
+equivalent mathematical notation matching in ingestion.py instead.
 """
 import re
 import unicodedata

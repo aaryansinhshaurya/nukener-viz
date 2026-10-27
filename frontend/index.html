@@ -113,7 +113,7 @@
         <input type="file" id="uploadFileInput" accept=".csv,.json,.jsonl" style="display:none">
         <div class="upload-icon">📂</div>
         <div class="upload-label">Click to upload or drag &amp; drop</div>
-        <div class="upload-sub">CSV, JSON, or JSONL — document_id, source, cleaned_title, chunk_id, chunk_text, entities, triplets. Offsets are added during upload; predictions without a valid highlight are skipped.</div>
+        <div class="upload-sub">CSV, JSON, or JSONL — document_id, source, cleaned_title, chunk_id, chunk_text, entities, triplets. Every item in entities is loaded; exact text and equivalent mathematical notation are highlighted. The rest are listed below the chunk.</div>
       </label>
       <div id="uploadStatus" class="status-line"></div>
     </div>
@@ -218,7 +218,7 @@
             <div class="format-hint">
               <div class="hint-block"><strong>CSV columns</strong><br>source, document_id, cleaned_title, chunk_id, chunk_text, entities, triplets<br><code>entities: [{"entity_text":"...","entity_class":"...","start_char":0,"end_char":3}]</code></div>
               <div class="hint-block">The backend locates entities during upload. Only predictions with valid, non-overlapping spans are loaded and highlighted. Triplets are ignored in this phase.</div>
-              <div class="hint-block"><strong>JSON / JSONL</strong><br>Upload a JSON list of chunk objects or one chunk object per line; running an offset script first is optional.</div>
+              <div class="hint-block"><strong>JSON / JSONL</strong><br>Upload a JSON list of chunk objects or one chunk object per line. Every entity in the entities array is shown.</div>
             </div>
           </div>
 

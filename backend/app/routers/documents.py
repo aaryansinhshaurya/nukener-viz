@@ -1,4 +1,5 @@
 import uuid
+from collections import Counter
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from sqlalchemy.orm import Session, selectinload
 from app.db import get_db
@@ -29,7 +30,7 @@ def upload_dataset(
         raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
     try:
         chunks = parse_dataset(raw, file.filename or "")
-        chunks, entities_skipped = align_chunks(chunks)
+        chunks, entities_without_offsets = align_chunks(chunks)
         validate_chunks(chunks)
     except IngestionError as exc:
         raise HTTPException(status_code=422, detail={"errors": exc.errors}) from exc
@@ -41,7 +42,7 @@ def upload_dataset(
         .all()
     )
     if existing_documents:
-        return _add_missing_entities(db, existing_documents, chunks, entities_skipped)
+        return _add_missing_entities(db, existing_documents, chunks, entities_without_offsets)
 
     doc_map: dict[str, Document] = {}
     entities_created = 0
@@ -74,12 +75,12 @@ def upload_dataset(
     db.commit()
     return UploadSummary(
         documents_created=len(doc_map), chunks_created=len(chunks),
-        entities_created=entities_created, entities_skipped=entities_skipped,
+        entities_created=entities_created, entities_without_offsets=entities_without_offsets,
     )
 
 
-def _add_missing_entities(db: Session, documents: list[Document], chunks: list[ChunkIn], entities_skipped: int) -> UploadSummary:
-    """Preserve reviews on repeat upload of an identical chunk dataset."""
+def _add_missing_entities(db: Session, documents: list[Document], chunks: list[ChunkIn], entities_without_offsets: int) -> UploadSummary:
+    """Preserve reviews when the stored predictions match the uploaded arrays."""
     existing = {
         (document.doc_id_external, chunk.chunk_id_external): chunk
         for document in documents for chunk in document.chunks
@@ -91,13 +92,28 @@ def _add_missing_entities(db: Session, documents: list[Document], chunks: list[C
         stored = existing[(item.document_id, item.chunk_id)]
         if stored.text != item.chunk_text:
             raise HTTPException(status_code=409, detail=f"Chunk {item.chunk_id} differs from the existing dataset. No entities were added.")
+        uploaded_counts = Counter(
+            (entity.start_char, entity.end_char, entity.entity_text, entity.entity_class)
+            for entity in item.entities
+        )
+        stored_counts = Counter(
+            (entity.start_char, entity.end_char, entity.text, entity.label)
+            for entity in stored.entities if entity.source == EntitySource.MODEL
+        )
+        if any(count > uploaded_counts[key] for key, count in stored_counts.items()):
+            raise HTTPException(status_code=409, detail=(
+                "This project contains predictions that differ from the uploaded entities array. "
+                "Create a new project for the exact dataset; existing reviews remain in this project."
+            ))
     added = 0
     for item in chunks:
         stored = existing[(item.document_id, item.chunk_id)]
-        known = {(e.start_char, e.end_char, e.text, e.label) for e in stored.entities if e.source == EntitySource.MODEL}
+        known = Counter((e.start_char, e.end_char, e.text, e.label)
+                        for e in stored.entities if e.source == EntitySource.MODEL)
         for prediction in item.entities:
             key = (prediction.start_char, prediction.end_char, prediction.entity_text, prediction.entity_class)
-            if key in known:
+            if known[key]:
+                known[key] -= 1
                 continue
             db.add(Entity(
                 chunk_id=stored.id, text=prediction.entity_text,
@@ -105,12 +121,11 @@ def _add_missing_entities(db: Session, documents: list[Document], chunks: list[C
                 start_char=prediction.start_char, end_char=prediction.end_char,
                 confidence_score=prediction.entity_confidence_score,
             ))
-            known.add(key)
             added += 1
     db.commit()
     return UploadSummary(
         documents_created=0, chunks_created=0, entities_created=added,
-        entities_skipped=entities_skipped,
+        entities_without_offsets=entities_without_offsets,
     )
 
 
