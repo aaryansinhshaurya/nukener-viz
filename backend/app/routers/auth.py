@@ -108,7 +108,7 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     db.add(reset)
     db.commit()
     try:
-        send_email(user.email, "Reset your NukeNER Review password",
+        send_email(user.email, "Reset your NFKD NER Review password",
                    f"Open this link to reset your password (valid for one hour):\n"
                    f"{settings.FRONTEND_URL}/?reset={raw}\n\n"
                    "If you did not request this, you can ignore this email.")

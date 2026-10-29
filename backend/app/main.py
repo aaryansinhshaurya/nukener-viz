@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import auth, projects, documents, reviews, metrics, locks, versions, exports
 from app.config import settings
 
-app = FastAPI(title="NukeNER Review API", version="0.1.0")
+app = FastAPI(title="NFKD NER Review API", version="0.1.0")
 
 # Frontend is served from a different origin during dev (Vite on :5173,
 # or a static file:// / different port in prod) — the API has to allow

@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════
-   NukeNER Review — app.js
+   NFKD NER Review — app.js
    Talks to the FastAPI backend for accounts, reviews, locks,
    metrics, and saved versions.
    ═══════════════════════════════════════════════════════════ */
@@ -197,7 +197,7 @@ async function checkApiStatus() {
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
-  localStorage.setItem("nukener-theme", next);
+  localStorage.setItem("nfkd-viz-theme", next);
   updateThemeButtons();
 }
 

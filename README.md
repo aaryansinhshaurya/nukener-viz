@@ -1,4 +1,6 @@
-# NukeNER Review
+# NFKD-viz
+
+**NFKD NER Review**
 
 A collaborative application for checking named entity predictions. Reviewers mark each model prediction **TP** or **FP**. The metrics page reports precision (`TP / (TP + FP)`) and review coverage both overall and separately for every entity class. It does not estimate recall or capture missed entities.
 
